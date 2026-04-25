@@ -59,6 +59,46 @@ function wv(path) {
 /** Sleep for ms */
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Dismiss any 'Leave current replay?' or 'Unsaved changes' dialog that TV may
+ * have popped up since the last call. Safe no-op when no dialog is present.
+ * Inline (mirrors src/core/dialog.js) so e2e is self-contained.
+ */
+async function dismissDialogs() {
+  return await evaluate(`
+    (function() {
+      var dismissed = [];
+      var patterns = [
+        { match: /Leave current replay\\??/i, button: /^Leave$/i, note: 'leave_replay' },
+        { match: /Continue your last replay\\??/i, button: /^close$/i, note: 'continue_replay' },
+        { match: /You have unsaved changes/i, button: /^(Open anyway|Don'?t save|Discard|Abrir mesmo|Descartar|Não salvar|Abrir de todos|No guardar|Ouvrir quand|Ne pas enregistrer|Abandonner|Trotzdem öffnen|Nicht speichern|Verwerfen)$/i, note: 'unsaved' }
+      ];
+      var els = document.querySelectorAll('div, section');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.offsetParent === null) continue;
+        var t = el.textContent || '';
+        if (t.length > 600) continue;
+        for (var p = 0; p < patterns.length; p++) {
+          if (!patterns[p].match.test(t)) continue;
+          var btns = el.querySelectorAll('button');
+          for (var j = 0; j < btns.length; j++) {
+            var b = btns[j];
+            if (b.offsetParent === null) continue;
+            if (patterns[p].button.test((b.textContent || b.getAttribute('title') || '').trim())) {
+              b.click();
+              dismissed.push(patterns[p].note);
+              break;
+            }
+          }
+          break;
+        }
+      }
+      return dismissed;
+    })()
+  `);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('TradingView MCP — Full E2E (70 tools)', () => {
@@ -78,27 +118,28 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       Page = client.Page;
 
       // Reset any lingering state from a previous run before test execution.
-      // Stops replay if active, hides the replay toolbar, and dismisses any
-      // 'Leave current replay?' / unsaved-changes dialogs left over from a
-      // prior session — without this, every chart_set_symbol downstream hangs
-      // on a blocking modal that has no role='dialog' marker.
+      // Stops replay, returns to realtime, and dismisses any
+      // 'Leave current replay?' / 'Continue your last replay?' / unsaved-changes
+      // dialogs left over from a prior session — without this, every
+      // chart_set_symbol downstream hangs on a blocking modal that has no
+      // role='dialog' marker.
       try {
         await evaluate(`
           (function() {
             try {
               var api = window.TradingViewApi && window.TradingViewApi._replayApi;
               if (api && typeof api.stopReplay === 'function') api.stopReplay();
-              if (api && typeof api.hideReplayToolbar === 'function') api.hideReplayToolbar();
+              if (api && typeof api.goToRealtime === 'function') api.goToRealtime();
             } catch(e) {}
           })()
         `);
-        // Dismiss known modal dialogs (Leave current replay, unsaved changes).
-        // Inline so the e2e file has no dependency on src/core/dialog.js — keeps
-        // the e2e runnable in any branch state.
+        // Dismiss known modal dialogs. Inline so the e2e file has no dependency
+        // on src/core/dialog.js — keeps the e2e runnable in any branch state.
         await evaluate(`
           (function() {
             var patterns = [
               { match: /Leave current replay\\??/i, button: /^Leave$/i },
+              { match: /Continue your last replay\\??/i, button: /^close$/i },
               { match: /You have unsaved changes/i, button: /^(Open anyway|Don'?t save|Discard|Abrir mesmo|Descartar|Não salvar|Abrir de todos|No guardar|Ouvrir quand|Ne pas enregistrer|Abandonner|Trotzdem öffnen|Nicht speichern|Verwerfen)$/i }
             ];
             var els = document.querySelectorAll('div, section');
@@ -241,15 +282,28 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('chart_set_symbol — change ticker', async () => {
-      await evaluate(`${CHART_API}.setSymbol('AAPL', {})`);
-      await sleep(2500);
+      // Fire-and-forget setSymbol — TV 3.1.0 may return a Promise that hangs
+      // on a 'Leave current replay?' dialog. We don't await the promise here;
+      // we dismiss any dialog and then verify via symbol() polling.
+      await client.Runtime.evaluate({
+        expression: `${CHART_API}.setSymbol('AAPL', {})`,
+        awaitPromise: false,
+      });
+      await sleep(500);
+      await dismissDialogs();
+      await sleep(2000);
       const sym = await evaluate(`${CHART_API}.symbol()`);
       assert.ok(sym.includes('AAPL'), `Symbol changed to AAPL, got: ${sym}`);
     });
 
     it('chart_set_timeframe — change resolution', async () => {
-      await evaluate(`${CHART_API}.setResolution('D', {})`);
-      await sleep(1500);
+      await client.Runtime.evaluate({
+        expression: `${CHART_API}.setResolution('D', {})`,
+        awaitPromise: false,
+      });
+      await sleep(500);
+      await dismissDialogs();
+      await sleep(1000);
       const tf = await evaluate(`${CHART_API}.resolution()`);
       assert.equal(tf, '1D');
     });
@@ -1198,16 +1252,22 @@ val = array.get(a, 5)`;
   describe('Replay Mode', () => {
 
     after(async () => {
-      // Ensure replay is stopped
+      // Defensive replay teardown for TV 3.1.0. Both stopReplay and goToRealtime
+      // are needed — stopReplay alone leaves saved-replay state that triggers
+      // a 'Leave current replay?' dialog on subsequent setSymbol calls.
+      // Do NOT call hideReplayToolbar — that path corrupts account state
+      // (issue #20, enforced by tests/replay.test.js source audit).
       try {
-        const rp = REPLAY_API;
-        const started = await evaluate(wv(`${rp}.isReplayStarted()`));
-        if (started) {
-          await evaluate(`${rp}.stopReplay()`);
-          await evaluate(`${rp}.goToRealtime()`);
-          await evaluate(`${rp}.hideReplayToolbar()`);
-          await sleep(500);
-        }
+        await evaluate(`
+          (function() {
+            var api = window.TradingViewApi && window.TradingViewApi._replayApi;
+            if (!api) return;
+            try { api.stopReplay(); } catch(e) {}
+            try { api.goToRealtime(); } catch(e) {}
+          })()
+        `);
+        await sleep(500);
+        await dismissDialogs();
       } catch {}
     });
 

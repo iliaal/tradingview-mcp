@@ -22,8 +22,20 @@ import { evaluate as _evaluate } from '../connection.js';
 const DISMISS_PATTERNS = [
   {
     match: /Leave current replay\??/i,
+    // 'Leave' discards the in-progress replay. The other button is 'Stay'
+    // which keeps replay active (and would block whatever triggered the dialog).
     button: /^Leave$/i,
     note: 'leave_replay',
+  },
+  {
+    match: /Continue your last replay\??/i,
+    // This dialog appears at startup or when replay state was saved from a
+    // previous session. Buttons are 'Continue' (resumes saved replay — bad
+    // for automation, puts us back in replay), 'Start new' (starts a new
+    // replay — also bad), and 'close' (the X, dismisses without action).
+    // We click 'close' so TV doesn't auto-resume replay during tests.
+    button: /^close$/i,
+    note: 'continue_replay',
   },
   {
     match: /You have unsaved changes/i,

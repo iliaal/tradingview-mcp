@@ -99,13 +99,15 @@ export async function stop({ _deps } = {}) {
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
     // Even when the API reports replay isn't started, TV occasionally has a
-    // "Leave current replay?" dialog lingering from a stale state. Clear it.
+    // 'Leave current replay?' dialog lingering from a stale state. Clear it.
     const dismissed = await dismissBlockingDialogs({ evaluate });
     return { success: true, action: 'already_stopped', dismissed_dialogs: dismissed };
   }
+  // TV 3.1.0 needs both stopReplay and goToRealtime to fully exit replay
+  // mode — stopReplay alone leaves saved-replay state that triggers a
+  // 'Leave current replay?' dialog on the next setSymbol/setResolution.
   await evaluate(`${rp}.stopReplay()`);
-  // After stopReplay, dismiss any "Leave current replay?" / "Save this replay?"
-  // dialogs so callers don't have to deal with a half-stopped state.
+  await evaluate(`${rp}.goToRealtime()`);
   const dismissed = await dismissBlockingDialogs({ evaluate });
   return { success: true, action: 'replay_stopped', dismissed_dialogs: dismissed };
 }
