@@ -710,3 +710,80 @@ export async function listScripts() {
     error: scripts?.error,
   };
 }
+
+/**
+ * Switch the Pine editor to a different saved script via the UI dropdown.
+ * Properly switches editor context (unlike pine_open which just sets the
+ * source code). Steps: click nameButton → find target script entry by
+ * textContent in the dropdown → dispatch a real mousePressed/mouseReleased
+ * pair at its coordinates → verify the nameButton now shows the new name.
+ */
+export async function switchScript({ name }) {
+  const editorReady = await ensurePineEditorOpen();
+  if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  const currentBefore = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      return btn ? btn.textContent.trim() : null;
+    })()
+  `);
+  if (currentBefore === name) {
+    return { success: true, requested: name, current: name, shortCircuited: true };
+  }
+
+  const dropdownOpened = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()
+  `);
+  if (!dropdownOpened) throw new Error('Could not find Pine editor nameButton dropdown');
+
+  await new Promise(r => setTimeout(r, 500));
+
+  const escapedName = JSON.stringify(name);
+  const coords = await evaluate(`
+    (function() {
+      var target = ${escapedName};
+      var allEls = document.querySelectorAll('*');
+      for (var el of allEls) {
+        var t = (el.textContent || '').trim();
+        if (t === target && el.offsetParent !== null && el.offsetHeight > 15 && el.offsetHeight < 40 && el.childElementCount <= 1) {
+          var rect = el.getBoundingClientRect();
+          return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        }
+      }
+      return null;
+    })()
+  `);
+
+  if (!coords) {
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))`);
+    throw new Error('Script "' + name + '" not found in dropdown. Check pine_list_scripts for available names.');
+  }
+
+  const c = await getClient();
+  await c.Input.dispatchMouseEvent({ type: 'mousePressed', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+  await c.Input.dispatchMouseEvent({ type: 'mouseReleased', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  const currentName = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      return btn ? btn.textContent.trim() : 'unknown';
+    })()
+  `);
+
+  if (currentName !== name) {
+    throw new Error(
+      `switchScript failed: requested "${name}" but nameButton shows "${currentName}". ` +
+      `The dropdown click at (${coords.x}, ${coords.y}) may have missed the target.`
+    );
+  }
+
+  return { success: true, requested: name, current: currentName, coords };
+}
