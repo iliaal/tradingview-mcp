@@ -28,6 +28,7 @@ import CDP from 'chrome-remote-interface';
 // validating TV's underlying API directly.
 import * as coreUi from '../src/core/ui.js';
 import * as coreReplay from '../src/core/replay.js';
+import { disconnect as disconnectCoreClient } from '../src/connection.js';
 
 let client;
 let Runtime;
@@ -187,6 +188,11 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
 
   after(async () => {
     if (client) try { await client.close(); } catch {}
+    // Tests that called core wrappers (coreUi.openPanel, coreReplay.stop)
+    // opened a separate CDP client via src/connection.js getClient().
+    // Without this, the test runner waits for that client's WebSocket to
+    // time out before exiting — a multi-minute hang.
+    try { await disconnectCoreClient(); } catch {}
   });
 
   // ─── 1. HEALTH & CONNECTION (4 tools) ─────────────────────────────────
