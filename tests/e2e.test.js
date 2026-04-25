@@ -34,6 +34,7 @@ import * as corePane from '../src/core/pane.js';
 import * as coreChart from '../src/core/chart.js';
 import * as coreDrawing from '../src/core/drawing.js';
 import * as coreWatchlist from '../src/core/watchlist.js';
+import * as corePine from '../src/core/pine.js';
 import { dismissBlockingDialogs } from '../src/core/dialog.js';
 import { disconnect as disconnectCoreClient } from '../src/connection.js';
 
@@ -208,26 +209,12 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
 
     it('tv_health_check — CDP connection + chart state', async () => {
       assert.ok(client, 'CDP client connected');
-      const state = await evaluate(`
-        (function() {
-          var result = { url: window.location.href, title: document.title };
-          try {
-            var chart = ${CHART_API};
-            result.symbol = chart.symbol();
-            result.resolution = chart.resolution();
-            result.chartType = chart.chartType();
-            result.apiAvailable = true;
-          } catch(e) {
-            result.apiAvailable = false;
-            result.apiError = e.message;
-          }
-          return result;
-        })()
-      `);
-      assert.ok(state.apiAvailable, 'Chart API available');
-      assert.ok(state.symbol, 'Has symbol');
-      assert.ok(state.resolution, 'Has resolution');
-      assert.ok(typeof state.chartType === 'number', 'Has chart type');
+      const r = await coreHealth.healthCheck();
+      assert.equal(r.success, true, 'health_check returns success');
+      assert.equal(r.api_available, true, 'Chart API available');
+      assert.ok(r.chart_symbol, 'Has symbol');
+      assert.ok(r.chart_resolution, 'Has resolution');
+      assert.ok(typeof r.chart_type === 'number', 'Has chart type');
     });
 
     it('tv_discover — report available API paths', async () => {
@@ -240,19 +227,12 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('tv_ui_state — panels, buttons, chart state', async () => {
-      const state = await evaluate(`
-        (function() {
-          var ui = {};
-          var bottom = document.querySelector('[class*="layout__area--bottom"]');
-          ui.bottom_panel = { height: bottom ? bottom.offsetHeight : 0 };
-          var right = document.querySelector('[class*="layout__area--right"]');
-          ui.right_panel = { width: right ? right.offsetWidth : 0 };
-          ui.button_count = document.querySelectorAll('button').length;
-          return ui;
-        })()
-      `);
+      const state = await coreHealth.uiState();
       assert.ok(state, 'UI state returned');
-      assert.ok(state.button_count > 0, 'Buttons found');
+      assert.equal(state.success, true);
+      // ui_state surfaces buttons by region; just verify the structure and
+      // that at least one region populated.
+      assert.ok(state.buttons && Object.keys(state.buttons).length > 0, 'Buttons grouped by region');
     });
 
     it('tv_launch — auto-detect binary (non-destructive)', async () => {
@@ -289,9 +269,11 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     let originalType;
 
     before(async () => {
-      originalSymbol = await evaluate(`${CHART_API}.symbol()`);
-      originalTF = await evaluate(`${CHART_API}.resolution()`);
-      originalType = await evaluate(`${CHART_API}.chartType()`);
+      // Use the wrapper to read original state — same code path as user tools.
+      const state = await coreChart.getState();
+      originalSymbol = state.symbol;
+      originalTF = state.resolution;
+      originalType = state.chartType;
     });
 
     after(async () => {
@@ -610,8 +592,9 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_strategy_results — strategy metrics (panel-dependent)', async () => {
-      // Open strategy tester panel
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      // Open strategy tester via the wrapper — BOTTOM_BAR.showWidget is a
+      // silent no-op on TV 3.1.0; ui.openPanel uses the working button-click path.
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
 
       const data = await evaluate(`
@@ -623,30 +606,27 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       `);
       assert.ok(typeof data.panel_found === 'boolean', 'Strategy panel detection works');
 
-      // Close it
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_trades — trade list (panel-dependent)', async () => {
-      // Similar to strategy_results — verify panel detection
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
       const panelExists = await evaluate(`
         !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
       `);
       assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_equity — equity curve (panel-dependent)', async () => {
-      // Same pattern — just verify the panel access path works
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
       const panelExists = await evaluate(`
         !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
       `);
       assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_pine_shapes — read plotshape markers (B.12)', async () => {
@@ -763,16 +743,10 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     it('pine_get_source — read editor code', async () => {
       const ready = await ensureEditor();
       if (!ready) return; // Skip if editor can't be opened
-      const source = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return null;
-          return m.editor.getValue();
-        })()
-      `);
+      const r = await corePine.getSource();
       // Source might be null if Monaco fiber path changed
-      if (source !== null) {
-        assert.ok(typeof source === 'string', 'Source is string');
+      if (r.source !== null && r.source !== undefined) {
+        assert.ok(typeof r.source === 'string', 'Source is string');
       }
     });
 
@@ -780,20 +754,13 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       const ready = await ensureEditor();
       if (!ready) return;
       const testCode = '//@version=6\nindicator("E2E Test", overlay=true)\nplot(close)';
-      const set = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return false;
-          m.editor.setValue(${JSON.stringify(testCode)});
-          return true;
-        })()
-      `);
-      if (set) {
-        const readBack = await evaluate(`
-          (function() { var m = ${FIND_MONACO}; return m ? m.editor.getValue() : null; })()
-        `);
-        assert.ok(readBack && readBack.includes('E2E Test'), 'Source was set');
+      try {
+        await corePine.setSource({ source: testCode });
+      } catch {
+        return; // wrapper threw — Monaco fiber path may have changed
       }
+      const r = await corePine.getSource();
+      assert.ok(r.source && r.source.includes('E2E Test'), 'Source was set');
     });
 
     it('pine_compile — add to chart button', async () => {
@@ -835,30 +802,16 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     it('pine_get_errors — Monaco markers', async () => {
       const ready = await ensureEditor();
       if (!ready) return;
-      const errors = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return [];
-          var model = m.editor.getModel();
-          if (!model) return [];
-          return m.env.editor.getModelMarkers({ resource: model.uri }).map(function(mk) {
-            return { line: mk.startLineNumber, message: mk.message, severity: mk.severity };
-          });
-        })()
-      `);
-      assert.ok(Array.isArray(errors), 'Errors array returned');
+      const r = await corePine.getErrors();
+      assert.ok(Array.isArray(r.errors), 'Errors array returned');
     });
 
     it('pine_get_console — log output', async () => {
       const ready = await ensureEditor();
       if (!ready) return;
-      const entries = await evaluate(`
-        (function() {
-          var rows = document.querySelectorAll('[class*="consoleRow"], [class*="log-"], [class*="consoleLine"]');
-          return rows.length;
-        })()
-      `);
-      assert.ok(typeof entries === 'number', 'Console row count returned');
+      const r = await corePine.getConsole();
+      assert.ok(r, 'Console wrapper returned a result');
+      assert.ok(Array.isArray(r.entries) || typeof r.entry_count === 'number', 'Has entries or count');
     });
 
     it('pine_save — Ctrl+S dispatch', async () => {
@@ -966,11 +919,12 @@ val = array.get(a, 5)`;
   describe('Drawing', () => {
 
     after(async () => {
-      // Clean up all drawings
-      try { await evaluate(`${CHART_API}.removeAllShapes()`); } catch {}
+      // Clean up all drawings via the wrapper.
+      try { await coreDrawing.clearAll(); } catch {}
     });
 
     it('draw_shape — create horizontal line', async () => {
+      // Use the last bar's close as the point for a horizontal line.
       const quote = await evaluate(`
         (function() {
           var bars = ${BARS_PATH};
@@ -980,63 +934,44 @@ val = array.get(a, 5)`;
       `);
       if (!quote) return;
 
-      const result = await evaluate(`
-        (function() {
-          var api = ${CHART_API};
-          var id = api.createShape(
-            { time: ${quote.time}, price: ${quote.price} },
-            { shape: 'horizontal_line', overrides: {} }
-          );
-          return { entity_id: id };
-        })()
-      `);
-      assert.ok(result, 'Shape created');
+      const result = await coreDrawing.drawShape({
+        shape: 'horizontal_line',
+        point: { time: quote.time, price: quote.price },
+      });
+      assert.ok(result.success, 'Shape created');
       assert.ok(result.entity_id, 'Has entity_id');
     });
 
     it('draw_list — list drawings', async () => {
-      const shapes = await evaluate(`
-        (function() {
-          var all = ${CHART_API}.getAllShapes();
-          return all.map(function(s) { return { id: s.id, name: s.name }; });
-        })()
-      `);
-      assert.ok(Array.isArray(shapes), 'Shapes is array');
-      assert.ok(shapes.length > 0, 'Has at least one shape');
+      const r = await coreDrawing.listDrawings();
+      assert.ok(r.success, 'list returned success');
+      assert.ok(Array.isArray(r.shapes), 'shapes is array');
+      assert.ok(r.shapes.length > 0, 'Has at least one shape');
     });
 
     it('draw_get_properties — read shape details', async () => {
-      const shapes = await evaluate(`${CHART_API}.getAllShapes()`);
-      if (!shapes || shapes.length === 0) return;
+      const list = await coreDrawing.listDrawings();
+      if (!list.shapes || list.shapes.length === 0) return;
+      const id = list.shapes[0].id;
 
-      const result = await evaluate(`
-        (function() {
-          var api = ${CHART_API};
-          var shape = api.getShapeById('${shapes[0].id}');
-          if (!shape) return { error: 'not found' };
-          var props = {};
-          try { props.points = shape.getPoints(); } catch(e) {}
-          try { props.visible = shape.isVisible(); } catch(e) {}
-          return props;
-        })()
-      `);
+      const result = await coreDrawing.getProperties({ entity_id: id });
       assert.ok(result, 'Properties returned');
-      assert.ok(!result.error, 'No error');
+      assert.equal(result.success, true, 'No error');
     });
 
     it('draw_remove_one — remove single drawing', async () => {
-      const shapes = await evaluate(`${CHART_API}.getAllShapes()`);
-      if (!shapes || shapes.length === 0) return;
+      const list = await coreDrawing.listDrawings();
+      if (!list.shapes || list.shapes.length === 0) return;
 
-      const id = shapes[0].id;
-      await evaluate(`${CHART_API}.removeEntity('${id}')`);
-      const after = await evaluate(`${CHART_API}.getAllShapes()`);
-      const stillExists = after.some(s => s.id === id);
+      const id = list.shapes[0].id;
+      await coreDrawing.removeOne({ entity_id: id });
+      const after = await coreDrawing.listDrawings();
+      const stillExists = (after.shapes || []).some(s => s.id === id);
       assert.ok(!stillExists, 'Shape removed');
     });
 
     it('draw_clear — remove all drawings', async () => {
-      // Add a shape first
+      // Add a shape first via the wrapper, then clear.
       const quote = await evaluate(`
         (function() {
           var bars = ${BARS_PATH};
@@ -1045,12 +980,15 @@ val = array.get(a, 5)`;
         })()
       `);
       if (quote) {
-        await evaluate(`${CHART_API}.createShape({ time: ${quote.time}, price: ${quote.price} }, { shape: 'horizontal_line' })`);
+        await coreDrawing.drawShape({
+          shape: 'horizontal_line',
+          point: { time: quote.time, price: quote.price },
+        });
       }
 
-      await evaluate(`${CHART_API}.removeAllShapes()`);
-      const after = await evaluate(`${CHART_API}.getAllShapes()`);
-      assert.equal(after.length, 0, 'All shapes cleared');
+      await coreDrawing.clearAll();
+      const after = await coreDrawing.listDrawings();
+      assert.equal((after.shapes || []).length, 0, 'All shapes cleared');
     });
   });
 
@@ -1385,8 +1323,10 @@ val = array.get(a, 5)`;
   describe('Indicators', () => {
 
     it('indicator_toggle_visibility — show/hide study', async () => {
-      const studies = await evaluate(`${CHART_API}.getAllStudies()`);
-      if (!studies || studies.length === 0) return;
+      // chart_get_state surfaces studies — same path the indicator wrapper uses.
+      const state = await coreChart.getState();
+      const studies = state.studies || [];
+      if (studies.length === 0) return;
 
       const id = studies[0].id;
       const result = await evaluate(`
@@ -1407,8 +1347,9 @@ val = array.get(a, 5)`;
     });
 
     it('indicator_set_inputs — change study parameters', async () => {
-      const studies = await evaluate(`${CHART_API}.getAllStudies()`);
-      if (!studies || studies.length === 0) return;
+      const state = await coreChart.getState();
+      const studies = state.studies || [];
+      if (studies.length === 0) return;
 
       const id = studies[0].id;
       const result = await evaluate(`
@@ -1431,10 +1372,10 @@ val = array.get(a, 5)`;
     it('batch_run — verify symbol/tf switching mechanism', async () => {
       // batch_run iterates symbols + timeframes, sets each, then runs an action.
       // We test the underlying switching mechanism without running a full batch.
-      const original = await evaluate(`${CHART_API}.symbol()`);
-      assert.ok(original, 'Can read current symbol for batch switching');
+      const state = await coreChart.getState();
+      assert.ok(state.symbol, 'Can read current symbol for batch switching');
 
-      // Verify setSymbol exists
+      // Verify the batch wrapper's prerequisite TV API methods exist.
       const hasSetSymbol = await evaluate(`typeof ${CHART_API}.setSymbol === 'function'`);
       assert.ok(hasSetSymbol, 'setSymbol available for batch operations');
 
