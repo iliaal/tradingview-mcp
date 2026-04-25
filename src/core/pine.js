@@ -327,21 +327,26 @@ export async function compile() {
     (function() {
       var btns = document.querySelectorAll('button');
       var fallback = null;
+      var fallbackLabel = null;
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
         var text = btns[i].textContent.trim();
-        if (/save and add to chart/i.test(text)) {
+        // TV Desktop 3.1.0+ ships these as icon-only buttons; label lives in the title attr.
+        var title = btns[i].getAttribute('title') || '';
+        var label = text || title;
+        if (/save and add to chart/i.test(label)) {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!fallback && /^(Add to chart|Update on chart)/i.test(text)) {
+        if (!fallback && /^(Add to chart|Update on chart)$/i.test(label)) {
           fallback = btns[i];
+          fallbackLabel = label;
         }
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
           saveBtn = btns[i];
         }
       }
-      if (fallback) { fallback.click(); return fallback.textContent.trim(); }
+      if (fallback) { fallback.click(); return fallbackLabel; }
       if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
       return null;
     })()
@@ -486,12 +491,15 @@ export async function smartCompile() {
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
         var text = btns[i].textContent.trim();
-        if (/save and add to chart/i.test(text)) {
+        // TV Desktop 3.1.0+ ships these as icon-only buttons; label lives in the title attr.
+        var title = btns[i].getAttribute('title') || '';
+        var label = text || title;
+        if (/save and add to chart/i.test(label)) {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!addBtn && /^add to chart$/i.test(text)) addBtn = btns[i];
-        if (!updateBtn && /^update on chart$/i.test(text)) updateBtn = btns[i];
+        if (!addBtn && /^add to chart$/i.test(label)) addBtn = btns[i];
+        if (!updateBtn && /^update on chart$/i.test(label)) updateBtn = btns[i];
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) saveBtn = btns[i];
       }
       if (addBtn) { addBtn.click(); return 'Add to chart'; }
