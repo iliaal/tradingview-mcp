@@ -240,4 +240,81 @@ describe('core/data.js — smoke', () => {
     assert.equal(r.success, true);
     assert.ok(captured.includes('"RSI"'), 'study_filter passed via safeString into evaluate');
   });
+
+  // ── B.18 batchReadPanes ─────────────────────────────────────────────
+  it('test_batchReadPanes_smoke_throws_without_reads', async () => {
+    await assert.rejects(
+      data.batchReadPanes({}),
+      /reads.*is required/i,
+    );
+  });
+
+  it('test_batchReadPanes_smoke_basic', async () => {
+    installCdpMocks({
+      evaluate: async () => ({
+        layout: 's',
+        pane_count: 1,
+        panes: [{
+          index: 0,
+          symbol: 'AAPL',
+          resolution: '5',
+          ohlcv_summary: { bar_count: 5, period: { from: 1, to: 2 }, open: 100, close: 105, high: 110, low: 95 },
+          study_values: [{ name: 'RSI', values: { RSI: 55 } }],
+        }],
+      }),
+    });
+    const r = await data.batchReadPanes({
+      reads: { study_values: true, ohlcv_summary: { bars: 5 } },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.layout, 's');
+    assert.equal(r.pane_count, 1);
+    assert.equal(r.requested, 1);
+    assert.equal(r.panes[0].symbol, 'AAPL');
+    assert.equal(r.panes[0].ohlcv_summary.bar_count, 5);
+  });
+
+  it('test_batchReadPanes_smoke_pine_lines_format_passthrough', async () => {
+    // Verify format helpers convert raw items to deduplicated horizontal_levels.
+    installCdpMocks({
+      evaluate: async () => ({
+        layout: '2h',
+        pane_count: 2,
+        panes: [{
+          index: 0,
+          symbol: 'AAPL',
+          resolution: 'D',
+          pine_lines: [{
+            name: 'Levels',
+            count: 3,
+            items: [
+              { id: 'l1', raw: { y1: 100, y2: 100, x1: 1, x2: 2, st: 0, w: 1, ci: 'red' } },
+              { id: 'l2', raw: { y1: 110, y2: 110, x1: 1, x2: 2, st: 0, w: 1, ci: 'green' } },
+              { id: 'l3', raw: { y1: 100, y2: 100, x1: 3, x2: 4, st: 0, w: 1, ci: 'red' } },  // duplicate level 100
+            ],
+          }],
+        }],
+      }),
+    });
+    const r = await data.batchReadPanes({ reads: { pine_lines: {} } });
+    assert.equal(r.success, true);
+    assert.deepEqual(r.panes[0].pine_lines[0].horizontal_levels, [110, 100]);  // deduped, sorted
+    assert.equal(r.panes[0].pine_lines[0].total_lines, 3);
+  });
+
+  it('test_batchReadPanes_smoke_caps_wait_ms', async () => {
+    let evaluateCalled = false;
+    installCdpMocks({
+      evaluate: async () => {
+        evaluateCalled = true;
+        return { layout: 's', pane_count: 1, panes: [] };
+      },
+    });
+    const start = Date.now();
+    await data.batchReadPanes({ reads: { study_values: true }, wait_ms: 100 });
+    const elapsed = Date.now() - start;
+    assert.ok(evaluateCalled);
+    assert.ok(elapsed >= 100, `waited at least 100ms (got ${elapsed}ms)`);
+    // Cap test would require waiting 5s+, skipping for fast suite.
+  });
 });

@@ -4,12 +4,10 @@ Improvements tracked but not yet implemented.
 
 ## Deferred from previous fork-incorporation work
 
-- **B.18 `pane_read_batch`** (ttnsx888 668cc55d) — one-CDP-call multi-pane reader. Requires extracting per-pine-tool formatters (`formatPineLines` / `formatPineLabels` / `formatPineTables` / `formatPineBoxes`) into shared helpers; conflicts with our existing PR #90 + B.20 modifications to `data.js`.
-- **C.22 3-phase strategy detection with DOM fallback** (PR #51) — adds DOM-scrape fallback for strategy metrics. Conflicts with our PR #90 in `data.js`.
-- **C.26 DOM-scrape fallback for strategy results + trades** (PR #96) — same conflict family as C.22.
+- ~~**B.18 `pane_read_batch`** (ttnsx888 668cc55d)~~ — **DONE 2026-04-25** as a self-contained additive port. Format helpers duplicated rather than refactored to avoid conflict.
+- **C.22 3-phase strategy detection with DOM fallback** (PR #51) — **PERMANENTLY SKIPPED**. Superseded by PR #90 (which we merged); also contains a duplicate of the `ui_evaluate` security hole we removed in N.35; also contains Korean-locale-specific DOM scraping that wouldn't work for most users.
+- **C.26 DOM-scrape fallback for strategy results + trades** (PR #96) — **PERMANENTLY SKIPPED**. English-only label parsing with line-position fragility. PR #90 covers TV 3.1.0 strategy detection robustly enough that the fallback complexity isn't worth the maintenance cost.
 - **C.23 AsyncLocalStorage tab routing + persistent pin + study-readiness gate** (floatalgo `81efb1ff`) — significant architectural change to how tools are routed across tabs. Held for design discussion.
-
-These three (B.18, C.22, C.26) all rework `data.js` and need to be done together as a "data.js refactoring sweep" — applying any one without the others creates conflicts.
 
 ## Carried-forward smaller items
 

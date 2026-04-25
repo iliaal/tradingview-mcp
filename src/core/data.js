@@ -648,3 +648,339 @@ export async function getPineBoxes({ study_filter, verbose } = {}) {
   });
   return { success: true, study_count: studies.length, studies };
 }
+
+// ── batchReadPanes (B.18 — port of ttnsx888 668cc55d) ──────────────
+//
+// Read multiple pane data types in ONE CDP call across multiple panes.
+// Replaces the pane_focus → data_* loop for multi-symbol grid workflows.
+// Iterates pane indices via _chartWidgetCollection.getAll(), bypassing the
+// _activeChartWidgetWV singleton — non-active panes still have populated
+// pine graphics, study values, and line-tool drawings.
+
+function formatPineLines(raw, verbose) {
+  return (raw || []).map(s => {
+    const hLevels = [];
+    const seen = {};
+    const allLines = [];
+    for (const item of s.items) {
+      const v = item.raw;
+      const y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
+      const y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
+      if (verbose) allLines.push({ id: item.id, y1, y2, x1: v.x1, x2: v.x2, horizontal: v.y1 === v.y2, style: v.st, width: v.w, color: v.ci });
+      if (y1 != null && v.y1 === v.y2 && !seen[y1]) { hLevels.push(y1); seen[y1] = true; }
+    }
+    hLevels.sort((a, b) => b - a);
+    const result = { name: s.name, total_lines: s.count, horizontal_levels: hLevels };
+    if (verbose) result.all_lines = allLines;
+    return result;
+  });
+}
+
+function formatPineLabels(raw, max_labels, verbose) {
+  const limit = max_labels || 50;
+  return (raw || []).map(s => {
+    let labels = s.items.map(item => {
+      const v = item.raw;
+      const text = v.t || '';
+      const price = v.y != null ? Math.round(v.y * 100) / 100 : null;
+      if (verbose) return { id: item.id, text, price, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
+      return { text, price };
+    }).filter(l => l.text || l.price != null);
+    if (labels.length > limit) labels = labels.slice(-limit);
+    return { name: s.name, total_labels: s.count, showing: labels.length, labels };
+  });
+}
+
+function formatPineTables(raw) {
+  return (raw || []).map(s => {
+    const tables = {};
+    for (const item of s.items) {
+      const v = item.raw;
+      const tid = v.tid || 0;
+      if (!tables[tid]) tables[tid] = {};
+      if (!tables[tid][v.row]) tables[tid][v.row] = {};
+      tables[tid][v.row][v.col] = v.t || '';
+    }
+    const tableList = Object.entries(tables).map(([_tid, rows]) => {
+      const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
+      const formatted = rowNums.map(rn => {
+        const cols = rows[rn];
+        const colNums = Object.keys(cols).map(Number).sort((a, b) => a - b);
+        return colNums.map(cn => cols[cn]).filter(Boolean).join(' | ');
+      }).filter(Boolean);
+      return { rows: formatted };
+    });
+    return { name: s.name, tables: tableList };
+  });
+}
+
+function formatPineBoxes(raw, verbose) {
+  return (raw || []).map(s => {
+    const zones = [];
+    const seen = {};
+    const allBoxes = [];
+    for (const item of s.items) {
+      const v = item.raw;
+      const high = v.y1 != null && v.y2 != null ? Math.round(Math.max(v.y1, v.y2) * 100) / 100 : null;
+      const low = v.y1 != null && v.y2 != null ? Math.round(Math.min(v.y1, v.y2) * 100) / 100 : null;
+      if (verbose) allBoxes.push({ id: item.id, high, low, x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
+      if (high != null && low != null) { const key = high + ':' + low; if (!seen[key]) { zones.push({ high, low }); seen[key] = true; } }
+    }
+    zones.sort((a, b) => b.high - a.high);
+    const result = { name: s.name, total_boxes: s.count, zones };
+    if (verbose) result.all_boxes = allBoxes;
+    return result;
+  });
+}
+
+export async function batchReadPanes({ indices, reads, wait_ms } = {}) {
+  if (!reads || typeof reads !== 'object') throw new Error('batchReadPanes: `reads` is required');
+
+  const idxArg = Array.isArray(indices) && indices.length > 0
+    ? JSON.stringify(indices.map(Number))
+    : 'null';
+  const waitMs = Number(wait_ms) > 0 ? Math.min(Number(wait_ms), 5000) : 0;
+  if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+
+  const wantTables      = !!reads.pine_tables;
+  const wantLines       = !!reads.pine_lines;
+  const wantLabels      = !!reads.pine_labels;
+  const wantBoxes       = !!reads.pine_boxes;
+  const wantStudyValues = !!reads.study_values;
+  const wantOhlcv       = !!reads.ohlcv_summary;
+  const wantDrawings    = !!reads.drawings;
+
+  const tablesFilter = reads.pine_tables?.study_filter || '';
+  const linesFilter  = reads.pine_lines?.study_filter  || '';
+  const labelsFilter = reads.pine_labels?.study_filter || '';
+  const boxesFilter  = reads.pine_boxes?.study_filter  || '';
+  const ohlcvBars    = Math.min(Math.max(Number(reads.ohlcv_summary?.bars) || 20, 2), 500);
+
+  const expression = `
+    (function() {
+      var cwc = window.TradingViewApi._chartWidgetCollection;
+      var all = cwc.getAll();
+      var layoutType = cwc._layoutType;
+      if (typeof layoutType === 'object' && layoutType && typeof layoutType.value === 'function') layoutType = layoutType.value();
+      var inlineCount = cwc.inlineChartsCount;
+      if (typeof inlineCount === 'object' && inlineCount && typeof inlineCount.value === 'function') inlineCount = inlineCount.value();
+      var paneCount = Math.min(all.length, inlineCount || all.length);
+
+      var requestedIndices = ${idxArg};
+      var idxList = [];
+      if (requestedIndices) {
+        for (var i = 0; i < requestedIndices.length; i++) {
+          var ri = requestedIndices[i];
+          if (ri >= 0 && ri < paneCount) idxList.push(ri);
+        }
+      } else {
+        for (var j = 0; j < paneCount; j++) idxList.push(j);
+      }
+
+      function readGraphics(chart, collectionName, mapKey, filter) {
+        try {
+          var sources = chart.model().model().dataSources();
+          var results = [];
+          for (var si = 0; si < sources.length; si++) {
+            var s = sources[si];
+            if (!s.metaInfo) continue;
+            try {
+              var meta = s.metaInfo();
+              var name = meta.description || meta.shortDescription || '';
+              if (!name) continue;
+              if (filter && name.indexOf(filter) === -1) continue;
+              var g = s._graphics;
+              if (!g || !g._primitivesCollection) continue;
+              var outer = g._primitivesCollection[collectionName];
+              if (!outer || typeof outer.get !== 'function') continue;
+              var inner = outer.get(mapKey);
+              if (!inner || !inner._primitivesDataById) continue;
+              var map = inner._primitivesDataById;
+              if (typeof map.forEach !== 'function') continue;
+              var items = [];
+              map.forEach(function(v, id) { items.push({id: id, raw: v}); });
+              if (items.length > 0) results.push({name: name, count: items.length, items: items});
+            } catch(e) {}
+          }
+          return results;
+        } catch(e) { return []; }
+      }
+
+      function readStudyValues(chart) {
+        try {
+          var sources = chart.model().model().dataSources();
+          var results = [];
+          for (var si = 0; si < sources.length; si++) {
+            var s = sources[si];
+            if (!s.metaInfo) continue;
+            try {
+              var meta = s.metaInfo();
+              var name = meta.description || meta.shortDescription || '';
+              if (!name) continue;
+              var values = {};
+              try {
+                var dwv = s.dataWindowView();
+                if (dwv) {
+                  var items = dwv.items();
+                  if (items) {
+                    for (var i = 0; i < items.length; i++) {
+                      var it = items[i];
+                      if (it._value && it._value !== '∅' && it._title) values[it._title] = it._value;
+                    }
+                  }
+                }
+              } catch(e) {}
+              if (Object.keys(values).length > 0) results.push({ name: name, values: values });
+            } catch(e) {}
+          }
+          return results;
+        } catch(e) { return []; }
+      }
+
+      function readOhlcv(chart, barCount) {
+        try {
+          var bars = chart.model().mainSeries().bars();
+          if (!bars || typeof bars.lastIndex !== 'function') return null;
+          var end = bars.lastIndex();
+          var start = Math.max(bars.firstIndex(), end - barCount + 1);
+          var out = [];
+          for (var i = start; i <= end; i++) {
+            var v = bars.valueAt(i);
+            if (v) out.push({time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0});
+          }
+          if (out.length === 0) return null;
+          var first = out[0];
+          var last = out[out.length - 1];
+          var high = -Infinity, low = Infinity, volSum = 0;
+          for (var k = 0; k < out.length; k++) {
+            if (out[k].high > high) high = out[k].high;
+            if (out[k].low < low) low = out[k].low;
+            volSum += out[k].volume;
+          }
+          return {
+            bar_count: out.length,
+            period: { from: first.time, to: last.time },
+            open: first.open, close: last.close, high: high, low: low,
+            range: Math.round((high - low) * 100) / 100,
+            change: Math.round((last.close - first.open) * 100) / 100,
+            change_pct: Math.round(((last.close - first.open) / first.open) * 10000) / 100 + '%',
+            avg_volume: Math.round(volSum / out.length),
+            last_5_bars: out.slice(-5),
+            total_bars: bars.size()
+          };
+        } catch(e) { return { error: e.message }; }
+      }
+
+      function safeCall(obj, method) {
+        try { if (typeof obj[method] === 'function') return obj[method](); } catch(e) {}
+        return undefined;
+      }
+
+      function readDrawings(chart) {
+        try {
+          var sources = chart.model().model().dataSources();
+          var out = [];
+          for (var si = 0; si < sources.length; si++) {
+            var s = sources[si];
+            if (typeof s.points !== 'function' || typeof s.properties !== 'function') continue;
+            try {
+              var id = safeCall(s, 'id');
+              if (typeof id !== 'string' && typeof id !== 'number') continue;
+              var entry = { entity_id: id };
+              var nm = safeCall(s, 'name');
+              if (typeof nm === 'string') entry.name = nm;
+              else if (typeof s.toolname === 'string') entry.name = s.toolname;
+              var canon = null;
+              var rawT = safeCall(s, 'toolname');
+              if (typeof rawT === 'string' && rawT.length > 0) canon = rawT;
+              if (!canon && typeof s.toolname === 'string') canon = s.toolname;
+              if (!canon && entry.name) {
+                var n = String(entry.name).trim().toLowerCase();
+                var nameMap = {
+                  'trend line': 'trend_line', 'trendline': 'trend_line',
+                  'horizontal line': 'horizontal_line', 'horizontal ray': 'horizontal_ray',
+                  'vertical line': 'vertical_line',
+                  'fib retracement': 'fib_retracement', 'fibonacci retracement': 'fib_retracement',
+                  'fib extension': 'fib_extension', 'fibonacci extension': 'fib_extension',
+                  'rectangle': 'rectangle', 'ellipse': 'ellipse',
+                  'text': 'text', 'note': 'note', 'callout': 'callout',
+                  'arrow': 'arrow', 'price label': 'price_label', 'price range': 'price_range',
+                };
+                canon = nameMap[n] || n.replace(/\s+/g, '_');
+              }
+              if (canon) entry.type = canon;
+              var pts = safeCall(s, 'points');
+              if (pts) entry.points = pts;
+              try {
+                var pRaw = s.properties();
+                if (pRaw) {
+                  var flat = (typeof pRaw.state === 'function') ? pRaw.state() : pRaw;
+                  entry.properties = flat;
+                }
+              } catch(e) { entry.properties_error = e.message; }
+              var vis = safeCall(s, 'isVisible');
+              if (vis !== undefined) entry.visible = vis;
+              var lock = safeCall(s, 'isLocked');
+              if (lock !== undefined) entry.locked = lock;
+              var sel = safeCall(s, 'isSelectionEnabled');
+              if (sel !== undefined) entry.selectable = sel;
+              out.push(entry);
+            } catch(e) {}
+          }
+          return out;
+        } catch(e) { return []; }
+      }
+
+      var panes = [];
+      for (var p = 0; p < idxList.length; p++) {
+        var idx = idxList[p];
+        var chart = all[idx];
+        var paneOut = { index: idx };
+        try {
+          var ms = chart.model().mainSeries();
+          paneOut.symbol = ms.symbol();
+          paneOut.resolution = ms.interval();
+          ${wantTables      ? 'paneOut.pine_tables  = readGraphics(chart, "dwgtablecells", "tableCells", ' + JSON.stringify(tablesFilter) + ');' : ''}
+          ${wantLines       ? 'paneOut.pine_lines   = readGraphics(chart, "dwglines",      "lines",      ' + JSON.stringify(linesFilter)  + ');' : ''}
+          ${wantLabels      ? 'paneOut.pine_labels  = readGraphics(chart, "dwglabels",     "labels",     ' + JSON.stringify(labelsFilter) + ');' : ''}
+          ${wantBoxes       ? 'paneOut.pine_boxes   = readGraphics(chart, "dwgboxes",      "boxes",      ' + JSON.stringify(boxesFilter)  + ');' : ''}
+          ${wantStudyValues ? 'paneOut.study_values = readStudyValues(chart);' : ''}
+          ${wantOhlcv       ? 'paneOut.ohlcv_summary = readOhlcv(chart, ' + ohlcvBars + ');' : ''}
+          ${wantDrawings    ? 'paneOut.drawings = readDrawings(chart);' : ''}
+        } catch(e) { paneOut.error = e.message; }
+        panes.push(paneOut);
+      }
+
+      return { layout: layoutType, pane_count: paneCount, panes: panes };
+    })()
+  `;
+
+  const rawResult = await evaluate(expression);
+  if (!rawResult) throw new Error('batchReadPanes: empty response from CDP');
+
+  const labelsMax = reads.pine_labels?.max_labels;
+  const linesVerbose  = !!reads.pine_lines?.verbose;
+  const labelsVerbose = !!reads.pine_labels?.verbose;
+  const boxesVerbose  = !!reads.pine_boxes?.verbose;
+
+  const panes = rawResult.panes.map(p => {
+    const out = { index: p.index, symbol: p.symbol, resolution: p.resolution };
+    if (p.error) out.error = p.error;
+    if (p.pine_tables)  out.pine_tables  = formatPineTables(p.pine_tables);
+    if (p.pine_lines)   out.pine_lines   = formatPineLines(p.pine_lines, linesVerbose);
+    if (p.pine_labels)  out.pine_labels  = formatPineLabels(p.pine_labels, labelsMax, labelsVerbose);
+    if (p.pine_boxes)   out.pine_boxes   = formatPineBoxes(p.pine_boxes, boxesVerbose);
+    if (p.study_values) out.study_values = p.study_values;
+    if (p.ohlcv_summary) out.ohlcv_summary = p.ohlcv_summary;
+    if (p.drawings)     out.drawings     = p.drawings;
+    return out;
+  });
+
+  return {
+    success: true,
+    layout: rawResult.layout,
+    pane_count: rawResult.pane_count,
+    requested: panes.length,
+    panes,
+  };
+}
