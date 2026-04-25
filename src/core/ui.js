@@ -32,31 +32,145 @@ export async function openPanel({ panel, action }) {
   const isBottomPanel = panel === 'pine-editor' || panel === 'strategy-tester';
   if (isBottomPanel) {
     const widgetName = panel === 'pine-editor' ? 'pine-editor' : 'backtesting';
+    // TV Desktop 3.1.0 reworked the bottomWidgetBar: hideWidget() is gone,
+    // showWidget()/activateScriptEditorTab() are silent no-ops, and
+    // _enabledWidgets is empty. The toolbar buttons (data-name="pine-dialog-button"
+    // and the strategy tester header button) toggle the panel in both eras —
+    // we click them and infer open/close from a post-click visibility check.
     const result = await evaluate(`
       (function() {
         var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
-        if (!bwb) return { error: 'bottomWidgetBar not available' };
-        var panel = ${JSON.stringify(panel)};
+        var panelName = ${JSON.stringify(panel)};
         var widgetName = ${JSON.stringify(widgetName)};
         var action = ${JSON.stringify(action)};
-        var bottomArea = document.querySelector('[class*="layout__area--bottom"]');
-        var isOpen = !!(bottomArea && bottomArea.offsetHeight > 50);
-        if (panel === 'pine-editor') { var monacoEl = document.querySelector('.monaco-editor.pine-editor-monaco'); isOpen = isOpen && !!monacoEl; }
-        if (panel === 'strategy-tester') { var stratPanel = document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'); isOpen = isOpen && !!(stratPanel && stratPanel.offsetParent); }
-        var performed = 'none';
-        if (action === 'open' || (action === 'toggle' && !isOpen)) {
-          if (panel === 'pine-editor') { if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab(); else if (typeof bwb.showWidget === 'function') bwb.showWidget(widgetName); }
-          else { if (typeof bwb.showWidget === 'function') bwb.showWidget(widgetName); }
-          performed = 'opened';
-        } else if (action === 'close' || (action === 'toggle' && isOpen)) {
-          if (typeof bwb.hideWidget === 'function') bwb.hideWidget(widgetName);
-          performed = 'closed';
+
+        function isPanelOpen() {
+          // Canonical state across TV builds: the bottom-panel toggle button's
+          // aria-label is "Collapse panel" when expanded and "Open panel" when
+          // collapsed. Height thresholds were unreliable (bottom area is ~68px
+          // even when collapsed because of the always-visible toolbar strip).
+          var collapseBtn = document.querySelector('[data-name="toggle-visibility-button"]');
+          if (collapseBtn) {
+            var aria = (collapseBtn.getAttribute('aria-label') || '').toLowerCase();
+            // "Collapse panel" => panel is currently open
+            // "Open panel" => panel is currently closed
+            if (aria.indexOf('collapse') !== -1) return isCorrectWidget();
+            if (aria.indexOf('open') !== -1) return false;
+          }
+          // Older TV fallback: large bottom area + content visible
+          var bottomArea = document.querySelector('[class*="layout__area--bottom"]');
+          if (bottomArea && bottomArea.offsetHeight > 150) return isCorrectWidget();
+          return false;
         }
-        return { was_open: isOpen, performed: performed };
+
+        function isCorrectWidget() {
+          // Even when the panel is open, it might be showing a different widget.
+          // Verify the requested widget's content is actually rendered.
+          if (panelName === 'pine-editor') {
+            var monacoEl = document.querySelector('.monaco-editor.pine-editor-monaco');
+            if (!monacoEl) return false;
+            // Walk up to find an ancestor whose offsetHeight indicates real visibility.
+            var rect = monacoEl.getBoundingClientRect();
+            return rect.height > 50 && rect.width > 50;
+          }
+          if (panelName === 'strategy-tester') {
+            var stratPanel = document.querySelector('[data-name="backtesting"]')
+              || document.querySelector('[class*="strategyReport"]');
+            if (!stratPanel) return false;
+            var sr = stratPanel.getBoundingClientRect();
+            return sr.height > 50 && sr.width > 50;
+          }
+          return true;
+        }
+
+        function findToolbarButton() {
+          if (panelName === 'pine-editor') {
+            return document.querySelector('[data-name="pine-dialog-button"]')
+              || document.querySelector('[aria-label="Pine"]');
+          }
+          // strategy-tester
+          return document.querySelector('[data-name="backtesting-button"]')
+            || document.querySelector('[aria-label="Strategy Tester"]')
+            || document.querySelector('[data-name="backtesting"]');
+        }
+
+        function callApi(open) {
+          if (!bwb) return null;
+          try {
+            if (open) {
+              if (panelName === 'pine-editor' && typeof bwb.activateScriptEditorTab === 'function') { bwb.activateScriptEditorTab(); return 'activateScriptEditorTab'; }
+              if (typeof bwb.showWidget === 'function') { bwb.showWidget(widgetName); return 'showWidget'; }
+            } else {
+              // TV Desktop 3.1.0 removed hideWidget; the underscore-prefixed
+              // _hideWidget is still present, and toggleWidget (public) closes
+              // the panel when called with the currently-open widget.
+              if (typeof bwb.hideWidget === 'function') { bwb.hideWidget(widgetName); return 'hideWidget'; }
+              if (typeof bwb._hideWidget === 'function') { bwb._hideWidget(widgetName); return '_hideWidget'; }
+              if (typeof bwb.toggleWidget === 'function') { bwb.toggleWidget(widgetName); return 'toggleWidget'; }
+            }
+          } catch(e) {}
+          return null;
+        }
+
+        // The bottom-panel "Collapse panel" button (data-name=toggle-visibility-button)
+        // is the explicit close UX in TV's UI on all builds — used as a fallback
+        // when the API methods don't actually close the panel.
+        function findCollapseButton() {
+          return document.querySelector('[data-name="toggle-visibility-button"][aria-label*="Collapse" i]')
+            || document.querySelector('[data-name="toggle-visibility-button"]');
+        }
+
+        var wasOpen = isPanelOpen();
+        var performed = 'none';
+        var apiAction = null;
+        var clickedButton = false;
+
+        // Only mutate state when needed. Idempotent on already-open / already-closed.
+        if (action === 'open' || (action === 'toggle' && !wasOpen)) {
+          if (wasOpen) {
+            // Already open — only ensure the right tab is active.
+            apiAction = callApi(true);
+            var tabBtn = findToolbarButton();
+            if (tabBtn) { tabBtn.click(); clickedButton = true; }
+            performed = 'already_open';
+          } else {
+            // Closed → need to expand the panel AND select the right widget.
+            // Order matters: toolbar tab first (may auto-expand on some builds),
+            // then the API call, then the collapse-toggle as guarantee.
+            var tabBtn = findToolbarButton();
+            if (tabBtn) { tabBtn.click(); clickedButton = true; }
+            apiAction = callApi(true);
+            // Click the bottom-panel toggle-visibility button when its label
+            // says "Open panel" — this is the canonical expand path on TV 3.1.0.
+            var collapseToggle = findCollapseButton();
+            if (collapseToggle && /open/i.test(collapseToggle.getAttribute('aria-label') || '')) {
+              collapseToggle.click();
+            }
+            performed = 'opened';
+          }
+        } else if (action === 'close' || (action === 'toggle' && wasOpen)) {
+          if (!wasOpen) {
+            performed = 'already_closed';
+          } else {
+            // TV Desktop 3.1.0: hideWidget / _hideWidget / toggleWidget are all
+            // silent no-ops on this build. The collapse-panel button is the
+            // only path that actually closes. We try the API call (records
+            // intent + works on older TV) and click the collapse button.
+            apiAction = callApi(false);
+            var collapseBtn = findCollapseButton();
+            if (collapseBtn && /collapse/i.test(collapseBtn.getAttribute('aria-label') || '')) {
+              collapseBtn.click();
+              clickedButton = true;
+            }
+            performed = 'closed';
+          }
+        }
+
+        return { was_open: wasOpen, performed: performed, api_action: apiAction, clicked_button: clickedButton };
       })()
     `);
     if (result && result.error) throw new Error(result.error);
-    return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown' };
+    return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown', api_action: result?.api_action, clicked_button: result?.clicked_button };
   } else {
     const selectorMap = {
       'watchlist': { dataName: 'base-watchlist-widget-button', ariaLabel: 'Watchlist' },

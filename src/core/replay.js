@@ -2,6 +2,7 @@
  * Core replay mode logic.
  */
 import { evaluate as _evaluate, getReplayApi as _getReplayApi } from '../connection.js';
+import { dismissBlockingDialogs } from './dialog.js';
 
 export const VALID_AUTOPLAY_DELAYS = [100, 143, 200, 300, 1000, 2000, 3000, 5000, 10000];
 
@@ -97,10 +98,18 @@ export async function stop({ _deps } = {}) {
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
-    return { success: true, action: 'already_stopped' };
+    // Even when the API reports replay isn't started, TV occasionally has a
+    // 'Leave current replay?' dialog lingering from a stale state. Clear it.
+    const dismissed = await dismissBlockingDialogs({ evaluate });
+    return { success: true, action: 'already_stopped', dismissed_dialogs: dismissed };
   }
+  // TV 3.1.0 needs both stopReplay and goToRealtime to fully exit replay
+  // mode — stopReplay alone leaves saved-replay state that triggers a
+  // 'Leave current replay?' dialog on the next setSymbol/setResolution.
   await evaluate(`${rp}.stopReplay()`);
-  return { success: true, action: 'replay_stopped' };
+  await evaluate(`${rp}.goToRealtime()`);
+  const dismissed = await dismissBlockingDialogs({ evaluate });
+  return { success: true, action: 'replay_stopped', dismissed_dialogs: dismissed };
 }
 
 export async function trade({ action, _deps }) {
