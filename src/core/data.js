@@ -345,7 +345,7 @@ export async function getEquity({ _deps } = {}) {
 }
 
 export async function getQuote({ symbol, _deps } = {}) {
-  const { evaluate, evaluateAsync } = _resolve(_deps);
+  const { evaluate } = _resolve(_deps);
   const data = await evaluate(`
     (function() {
       var api = ${CHART_API};
@@ -526,7 +526,7 @@ export async function getPineTables({ study_filter, _deps } = {}) {
       if (!tables[tid][v.row]) tables[tid][v.row] = {};
       tables[tid][v.row][v.col] = v.t || '';
     }
-    const tableList = Object.entries(tables).map(([tid, rows]) => {
+    const tableList = Object.entries(tables).map(([_tid, rows]) => {
       const rowNums = Object.keys(rows).map(Number).sort((a, b) => a - b);
       const formatted = rowNums.map(rn => {
         const cols = rows[rn];

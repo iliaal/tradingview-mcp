@@ -3,7 +3,7 @@
  * Controls TradingView Desktop tabs via CDP and Electron keyboard shortcuts.
  */
 import CDP from 'chrome-remote-interface';
-import { getClient, evaluate, connectToTarget } from '../connection.js';
+import { getClient, connectToTarget } from '../connection.js';
 
 const CDP_HOST = process.env.TV_CDP_HOST || 'localhost';
 const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;

@@ -38,7 +38,7 @@ export async function click({ by, value, _deps }) {
 }
 
 export async function openPanel({ panel, action, _deps }) {
-  const { evaluate, getClient } = _resolve(_deps);
+  const { evaluate } = _resolve(_deps);
   const isBottomPanel = panel === 'pine-editor' || panel === 'strategy-tester';
   if (isBottomPanel) {
     const widgetName = panel === 'pine-editor' ? 'pine-editor' : 'backtesting';

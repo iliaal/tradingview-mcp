@@ -239,8 +239,10 @@ export function analyze({ source }) {
   };
 }
 
-export async function check({ source, _deps }) {
-  const { evaluate, evaluateAsync } = _resolve(_deps);
+export async function check({ source }) {
+  // check() is pure HTTP to pine-facade — no CDP eval involved, so _deps
+  // would be unused. Removed for lint cleanliness; restore if a future
+  // call path needs to inject the fetch implementation.
   const formData = new URLSearchParams();
   formData.append('source', source);
 
@@ -648,7 +650,7 @@ export async function newScript({ type, _deps }) {
 }
 
 export async function openScript({ name, _deps }) {
-  const { evaluate, evaluateAsync } = _resolve(_deps);
+  const { evaluateAsync } = _resolve(_deps);
   const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -1005,7 +1007,6 @@ export async function renameScript({ name, _deps }) {
  * the dialog so the user can pick a revision.
  */
 export async function versionHistory({ _deps } = {}) {
-  const { evaluateAsync } = _resolve(_deps);
   const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
