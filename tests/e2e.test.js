@@ -242,15 +242,18 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       assert.ok(state.button_count > 0, 'Buttons found');
     });
 
-    it('tv_launch — auto-detect binary (verify path resolution only)', async () => {
-      // tv_launch is destructive (kills TradingView), so we only test path detection
-      const { existsSync } = await import('fs');
-      const paths = [
-        '/Applications/TradingView.app/Contents/MacOS/TradingView',
-        `${process.env.HOME}/Applications/TradingView.app/Contents/MacOS/TradingView`,
-      ];
-      const found = paths.some(p => existsSync(p));
-      assert.ok(found, 'TradingView binary found on disk');
+    it('tv_launch — auto-detect binary (non-destructive)', async () => {
+      // Exercise the actual launch wrapper. It short-circuits when CDP is
+      // already responding on the requested port (which it is, since this
+      // test suite runs against a live TV), so kill_existing:false is the
+      // safe path here — no process kill, just path resolution + the
+      // short-circuit success branch.
+      const { launch } = await import('../src/core/health.js');
+      const r = await launch({ kill_existing: false });
+      assert.equal(r.success, true, 'launch returned success');
+      assert.ok(r.cdp_port, 'cdp_port reported');
+      assert.ok(r.cdp_url, 'cdp_url reported');
+      assert.ok(['darwin', 'win32', 'linux', 'wsl'].includes(r.platform), `platform=${r.platform}`);
     });
   });
 

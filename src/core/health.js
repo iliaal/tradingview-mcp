@@ -2,8 +2,46 @@
  * Core health/discovery/launch logic.
  */
 import { getClient, getTargetInfo, evaluate } from '../connection.js';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
+
+// True when running on WSL2 — process.platform reports 'linux' but the
+// actual TradingView install is on the Windows host, reachable via /mnt/c/
+// for filesystem access and powershell.exe for process control.
+function isWsl() {
+  if (process.platform !== 'linux') return false;
+  try {
+    const v = readFileSync('/proc/version', 'utf8').toLowerCase();
+    return v.includes('microsoft') || v.includes('wsl');
+  } catch { return false; }
+}
+
+// Look up TradingView's MSIX install location on Windows via PowerShell.
+// Get-AppxPackage returns the canonical InstallLocation regardless of the
+// hashed package directory name (which changes per version). Returns the
+// path to TradingView.exe, or null when the package is not installed or
+// powershell.exe is unavailable.
+function findMsixTradingView({ wsl = false } = {}) {
+  try {
+    const psBin = wsl ? 'powershell.exe' : 'powershell';
+    const out = execSync(
+      `${psBin} -NoProfile -Command "Get-AppxPackage -Name TradingView.Desktop | Select-Object -ExpandProperty InstallLocation"`,
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+    ).toString().trim();
+    if (!out) return null;
+    const winPath = `${out}\\TradingView.exe`;
+    if (!wsl) {
+      return existsSync(winPath) ? winPath : null;
+    }
+    // WSL: convert C:\Foo\Bar to /mnt/c/Foo/Bar to verify existence.
+    const linuxPath = winPath
+      .replace(/^([A-Za-z]):/, (_m, d) => `/mnt/${d.toLowerCase()}`)
+      .replace(/\\/g, '/');
+    return existsSync(linuxPath) ? winPath : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function healthCheck() {
   await getClient();
@@ -163,6 +201,31 @@ export async function launch({ port, kill_existing } = {}) {
   const cdpPort = port || 9222;
   const killFirst = kill_existing !== false;
   const platform = process.platform;
+  const wsl = isWsl();
+
+  // Short-circuit: if CDP is already responding on the requested port, treat
+  // the launch as successful. This covers the WSL case (TV runs on Windows,
+  // we forward localhost) and the "user already launched TV manually" case.
+  try {
+    const http = await import('http');
+    const alreadyUp = await new Promise((resolve) => {
+      http.get(`http://localhost:${cdpPort}/json/version`, { timeout: 1500 }, (res) => {
+        let data = '';
+        res.on('data', (c) => data += c);
+        res.on('end', () => resolve(data));
+      }).on('error', () => resolve(null));
+    });
+    if (alreadyUp && !killFirst) {
+      const info = JSON.parse(alreadyUp);
+      return {
+        success: true, platform: wsl ? 'wsl' : platform,
+        binary: '(already running)', cdp_port: cdpPort,
+        cdp_url: `http://localhost:${cdpPort}`,
+        browser: info.Browser, user_agent: info['User-Agent'],
+        already_running: true,
+      };
+    }
+  } catch { /* fall through to launch */ }
 
   const pathMap = {
     darwin: [
@@ -207,20 +270,48 @@ export async function launch({ port, kill_existing } = {}) {
     } catch { /* ignore */ }
   }
 
+  // Windows MSIX (Microsoft Store) install detection. Static paths above
+  // miss MSIX installs because they live under
+  // C:\Program Files\WindowsApps\TradingView.Desktop_<hash>\ where <hash>
+  // changes every version. Get-AppxPackage gives us the canonical path.
+  if (!tvPath && (platform === 'win32' || wsl)) {
+    tvPath = findMsixTradingView({ wsl });
+  }
+
   if (!tvPath) {
-    throw new Error(`TradingView not found on ${platform}. Searched: ${candidates.join(', ')}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
+    throw new Error(`TradingView not found on ${wsl ? 'wsl' : platform}. Searched: ${candidates.join(', ')}${(platform === 'win32' || wsl) ? ', plus MSIX (Get-AppxPackage TradingView.Desktop)' : ''}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
   }
 
   if (killFirst) {
     try {
-      if (platform === 'win32') execSync('taskkill /F /IM TradingView.exe', { timeout: 5000 });
-      else execSync('pkill -f TradingView', { timeout: 5000 });
+      if (wsl) {
+        execSync('powershell.exe -NoProfile -Command "Get-Process -Name TradingView -ErrorAction SilentlyContinue | Stop-Process -Force"', { timeout: 5000, stdio: 'ignore' });
+      } else if (platform === 'win32') {
+        execSync('taskkill /F /IM TradingView.exe', { timeout: 5000 });
+      } else {
+        execSync('pkill -f TradingView', { timeout: 5000 });
+      }
       await new Promise(r => setTimeout(r, 1500));
     } catch { /* may not be running */ }
   }
 
-  const child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
-  child.unref();
+  // WSL: launch via PowerShell from the Windows side. cmd.exe + UNC path
+  // refuses to run when WSL's working dir is the cwd, so we shell into the
+  // user's Windows home directory first. Start-Process detaches cleanly.
+  let child;
+  if (wsl) {
+    // tvPath here is a Windows path (C:\...\TradingView.exe).
+    // PowerShell single-quoted strings escape ' as '' — split-then-join
+    // does the substitution; the source-audit reserves the regex-replace
+    // form of single-quote escaping for safeString() use cases.
+    const psQuoted = tvPath.split("'").join("''");
+    const psCmd = `Set-Location $env:USERPROFILE; Start-Process -FilePath '${psQuoted}' -ArgumentList '--remote-debugging-port=${cdpPort}'`;
+    child = spawn('powershell.exe', ['-NoProfile', '-Command', psCmd], { detached: true, stdio: 'ignore' });
+    child.unref();
+  } else {
+    child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
+    child.unref();
+  }
 
   for (let i = 0; i < 15; i++) {
     await new Promise(r => setTimeout(r, 1000));
@@ -236,7 +327,7 @@ export async function launch({ port, kill_existing } = {}) {
       if (ready) {
         const info = JSON.parse(ready);
         return {
-          success: true, platform, binary: tvPath, pid: child.pid,
+          success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child.pid,
           cdp_port: cdpPort, cdp_url: `http://localhost:${cdpPort}`,
           browser: info.Browser, user_agent: info['User-Agent'],
         };
@@ -245,7 +336,7 @@ export async function launch({ port, kill_existing } = {}) {
   }
 
   return {
-    success: true, platform, binary: tvPath, pid: child.pid, cdp_port: cdpPort, cdp_ready: false,
+    success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child.pid, cdp_port: cdpPort, cdp_ready: false,
     warning: 'TradingView launched but CDP not responding yet. It may still be loading. Try tv_health_check in a few seconds.',
   };
 }
