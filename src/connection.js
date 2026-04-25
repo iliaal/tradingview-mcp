@@ -7,6 +7,19 @@ const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
 
+// ── Test-mode overrides ─────────────────────────────────────────────────
+// Unit tests (tests/smoke/*) install mocks via __setTestOverrides so core/*
+// modules don't need a live CDP. Production code never touches this —
+// overrides default to null. Each gated export below short-circuits to its
+// override when one is installed for that key.
+let _testOverrides = null;
+
+/** Install test mocks. Pass null to reset. */
+export function __setTestOverrides(mocks) {
+  _testOverrides = mocks;
+}
+export function __getTestOverrides() { return _testOverrides; }
+
 // Known direct API paths discovered via live probing (see PROBE_RESULTS.md)
 const KNOWN_PATHS = {
   chartApi: 'window.TradingViewApi._activeChartWidgetWV.value()',
@@ -48,6 +61,7 @@ export function requireFinite(value, name) {
 }
 
 export async function getClient() {
+  if (_testOverrides?.getClient) return _testOverrides.getClient();
   if (client) {
     try {
       // Quick liveness check
@@ -97,6 +111,7 @@ async function findChartTarget() {
 }
 
 export async function getTargetInfo() {
+  if (_testOverrides?.getTargetInfo) return _testOverrides.getTargetInfo();
   if (!targetInfo) {
     await getClient();
   }
@@ -104,6 +119,7 @@ export async function getTargetInfo() {
 }
 
 export async function evaluate(expression, opts = {}) {
+  if (_testOverrides?.evaluate) return _testOverrides.evaluate(expression, opts);
   const c = await getClient();
   const result = await c.Runtime.evaluate({
     expression,
@@ -121,6 +137,7 @@ export async function evaluate(expression, opts = {}) {
 }
 
 export async function evaluateAsync(expression) {
+  if (_testOverrides?.evaluateAsync) return _testOverrides.evaluateAsync(expression);
   return evaluate(expression, { awaitPromise: true });
 }
 
@@ -165,25 +182,31 @@ async function verifyAndReturn(path, name) {
 }
 
 export async function getChartApi() {
+  if (_testOverrides?.getChartApi) return _testOverrides.getChartApi();
   return verifyAndReturn(KNOWN_PATHS.chartApi, 'Chart API');
 }
 
 export async function getChartCollection() {
+  if (_testOverrides?.getChartCollection) return _testOverrides.getChartCollection();
   return verifyAndReturn(KNOWN_PATHS.chartWidgetCollection, 'Chart Widget Collection');
 }
 
 export async function getBottomBar() {
+  if (_testOverrides?.getBottomBar) return _testOverrides.getBottomBar();
   return verifyAndReturn(KNOWN_PATHS.bottomWidgetBar, 'Bottom Widget Bar');
 }
 
 export async function getReplayApi() {
+  if (_testOverrides?.getReplayApi) return _testOverrides.getReplayApi();
   return verifyAndReturn(KNOWN_PATHS.replayApi, 'Replay API');
 }
 
 export async function getReplayUIController() {
+  if (_testOverrides?.getReplayUIController) return _testOverrides.getReplayUIController();
   return verifyAndReturn(KNOWN_PATHS.replayApi + '._replayUIController', 'Replay UI Controller');
 }
 
 export async function getMainSeriesBars() {
+  if (_testOverrides?.getMainSeriesBars) return _testOverrides.getMainSeriesBars();
   return verifyAndReturn(KNOWN_PATHS.mainSeriesBars, 'Main Series Bars');
 }
