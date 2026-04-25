@@ -1,8 +1,18 @@
 /**
  * Core health/discovery/launch/reconnect logic.
  */
-import { getClient, getTargetInfo, evaluate, disconnect, CDP_PORT } from '../connection.js';
-import { waitForChartReady } from '../wait.js';
+import { getClient as _getClient, getTargetInfo as _getTargetInfo, evaluate as _evaluate, disconnect as _disconnect, CDP_PORT } from '../connection.js';
+import { waitForChartReady as _waitForChartReady } from '../wait.js';
+
+function _resolve(deps) {
+  return {
+    getClient: deps?.getClient || _getClient,
+    getTargetInfo: deps?.getTargetInfo || _getTargetInfo,
+    evaluate: deps?.evaluate || _evaluate,
+    disconnect: deps?.disconnect || _disconnect,
+    waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
+  };
+}
 import { existsSync, readFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
 
@@ -44,7 +54,8 @@ function findMsixTradingView({ wsl = false } = {}) {
   }
 }
 
-export async function healthCheck() {
+export async function healthCheck({ _deps } = {}) {
+  const { getClient, getTargetInfo, evaluate } = _resolve(_deps);
   await getClient();
   const target = await getTargetInfo();
 
@@ -81,7 +92,8 @@ export async function healthCheck() {
   };
 }
 
-export async function discover() {
+export async function discover({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const paths = await evaluate(`
     (function() {
       var results = {};
@@ -127,7 +139,8 @@ export async function discover() {
   return { success: true, apis_available: available, apis_total: total, apis: paths };
 }
 
-export async function uiState() {
+export async function uiState({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const state = await evaluate(`
     (function() {
       var ui = {};
@@ -403,7 +416,7 @@ export async function launch({ port, kill_existing } = {}) {
  * If TV is running without CDP, kills it and relaunches with the debug port.
  * If TV isn't running at all, launches it fresh.
  */
-export async function ensureCDP() {
+export async function ensureCDP({ _deps } = {}) {
   // The MCP server's CDP client is bound to CDP_HOST/CDP_PORT at module load
   // (configured via env vars TV_CDP_HOST/TV_CDP_PORT). ensureCDP can only
   // meaningfully manage the port the client is bound to — accepting a
@@ -426,7 +439,7 @@ export async function ensureCDP() {
 
   if (cdpAlive) {
     try {
-      const health = await healthCheck();
+      const health = await healthCheck({ _deps });
       return {
         success: true,
         action: 'none',
@@ -482,7 +495,8 @@ export async function ensureCDP() {
  * the backend WebSocket session. Use when the TV session was taken
  * over by a browser/phone and you've switched back to Desktop.
  */
-export async function reconnect() {
+export async function reconnect({ _deps } = {}) {
+  const { getClient, evaluate, disconnect, waitForChartReady } = _resolve(_deps);
   let c;
   try {
     c = await getClient();
@@ -531,7 +545,7 @@ export async function reconnect() {
   const chartReady = await waitForChartReady(null, null, 20000);
 
   try {
-    const health = await healthCheck();
+    const health = await healthCheck({ _deps });
     return {
       success: true,
       reconnected: true,

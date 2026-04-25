@@ -2,33 +2,35 @@
 
 Improvements tracked but not yet implemented.
 
-## Deferred from previous fork-incorporation work
+## Recently shipped (kept for context, dated)
 
-- ~~**B.18 `pane_read_batch`** (ttnsx888 668cc55d)~~ — **DONE 2026-04-25** as a self-contained additive port. Format helpers duplicated rather than refactored to avoid conflict.
-- **C.22 3-phase strategy detection with DOM fallback** (PR #51) — **PERMANENTLY SKIPPED**. Superseded by PR #90 (which we merged); also contains a duplicate of the `ui_evaluate` security hole we removed in N.35; also contains Korean-locale-specific DOM scraping that wouldn't work for most users.
-- **C.26 DOM-scrape fallback for strategy results + trades** (PR #96) — **PERMANENTLY SKIPPED**. English-only label parsing with line-position fragility. PR #90 covers TV 3.1.0 strategy detection robustly enough that the fallback complexity isn't worth the maintenance cost.
-- **C.23 AsyncLocalStorage tab routing + persistent pin + study-readiness gate** (floatalgo `81efb1ff`) — significant architectural change to how tools are routed across tabs. Held for design discussion.
+- **2026-04-25** — B.18 `pane_read_batch` (ttnsx888 668cc55d): self-contained additive port, format helpers duplicated rather than refactored to avoid conflict.
+- **2026-04-25** — `pine_smart_compile` exposes `elapsed_ms` so callers know how long compilation took.
+- **2026-04-25** — `tab_list` includes the active Pine script name per tab (DOM probe via `pine-script-title-button`).
+- **2026-04-25** — `tab_switch_by_name`: switch by Pine script name (exact-then-substring match) instead of by index.
+- **2026-04-25** — Cycle 1 (6 bugs): `tv_launch` null pid, `pane_read_batch` wrong unwrap path, port param fiction in `ensureCDP`, `watchlist.addBulk` macOS modifier, `paths.resolveScreenshotDir` traversal vector, `pine.saveAs` silent reopen failure. Cycle 2 (3 perf items): page-side cap in `buildGraphicsJS`, dialog selector pre-filter, per-target Pine read timeout. (`fork-port/cycle-1-2-fixes`)
+- **2026-04-25** — `stream.js` smoke coverage (10 tests). Added `_deps` to `pollLoop` so iteration count, sleep, signals, and stdout/stderr are injectable. Includes regressions for the `inner.get(false)` unwrap path and study-filter threading.
+- **2026-04-25** — Per-call `_deps` DI migration for 10 core modules: alerts, batch, capture, data, health, indicators, pane, pine, ui, watchlist. The global `__setTestOverrides` hook still works as the underlying fallback. (`refactor/wrappers-and-di`)
+- **2026-04-25** — E2e wrapper refactor: 37 of 79 raw `evaluate(...CHART_API...)` sites replaced with wrapper calls (`coreChart`, `coreDrawing`, `coreHealth`, `corePine`, `coreData`, `coreUi`, `coreIndicators`). Includes the four "output size budget" tests that were re-implementing wrapper IIFEs verbatim — now they assert the wrapper's actual output, so a TV API rename produces a single-source failure instead of parallel-implementation drift. Down to 42 raw sites; the rest are DOM existence probes, FIND_MONACO walks, or BARS_PATH single-bar reads with no wrapper equivalent. (`refactor/wrappers-and-di`)
+- **2026-04-25** — TV Desktop 3.1.0 quirks wiki entry written at `~/ai/wiki/vendors/tradingview-desktop.md` covering API surface changes, state-pollution traps, Pine graphics object path, and launch-path quirks.
 
-## Carried-forward smaller items
+## Held for design discussion
 
-- **`pine_smart_compile`**: expose `elapsed_ms` so callers know how long compilation took.
-- **`data_get_strategy_results_dom`**: tighten regex patterns as TradingView UI text changes (covered by C.22 if/when ported).
-- **`tab_list`**: include which Pine script is active in each tab's editor (requires `pine-facade` introspection).
-- **`tab_switch_by_name`**: switch directly by Pine script name instead of by index.
-- **E2e wrapper refactor remainder**: ~73 raw-CDP sites in `tests/e2e.test.js` (`${CHART_API}.setSymbol`, `${REPLAY_API}.*`, etc.). 4 of 79 tests refactored so far (`ui_open_panel`, `replay_stop`, `tv_launch`, plus a partial). Rewriting the rest to use our wrapper functions makes e2e immune to TV API renames.
-- **`quote_get output < 500 bytes`** size threshold: passes/fails depending on chart contents; threshold may need adjustment.
+- **C.23 AsyncLocalStorage tab routing + persistent pin + study-readiness gate** (floatalgo `81efb1ff`) — significant architectural change to how tools are routed across tabs. Needs design call before code.
 
-## Known TV Desktop 3.1.0 quirks worth documenting
+## Permanently skipped (kept so future-me doesn't re-investigate)
 
-- `_replaySessionState` cleanup (live-discovered, fixed in our `replay.stop()`).
-- `WatchableValue` accessor breakage on `bottomWidgetBar` (`isAvailable`, `isHidden`, `mode` etc. now return subscription objects, not booleans).
-- `bottomWidgetBar.hideWidget` removed; `_hideWidget` and `toggleWidget` are silent no-ops; only the toolbar collapse button actually closes the panel.
-- `chart.symbolExt()` removed; `chart.symbolInfo()` not exposed via the public API. Our `symbolInfo()` falls back to `chart.symbol()` + `chart.resolution()` + `chart.chartType()`.
-- `window.monaco` not exposed globally on TV 3.1.0; the React fiber walk in `FIND_MONACO` is the only working path.
+- **C.22 3-phase strategy detection with DOM fallback** (PR #51) — superseded by PR #90 (which we merged); also contains a duplicate of the `ui_evaluate` security hole we removed in N.35; also Korean-locale-specific DOM scraping that wouldn't work for most users.
+- **C.26 DOM-scrape fallback for strategy results + trades** (PR #96) — English-only label parsing with line-position fragility. PR #90 covers TV 3.1.0 strategy detection robustly enough that the fallback complexity isn't worth the maintenance cost.
+- **`data_get_strategy_results_dom` regex tightening** — was tied to C.22; skipped by transitivity.
 
-## Sub-Agent Personas (Strategy Development) — speculative
+## Speculative future direction
+
+Sub-agent personas for strategy development:
 
 - **Architect**: writes Pine Script strategy from spec.
 - **Backtester**: runs parameter sweeps, reads strategy tester results.
 - **Reviewer**: static analysis + `pine_check` before compile.
 - **Reporter**: formats backtest results into structured summary.
+
+Not action items — captured for later if/when we go this direction.

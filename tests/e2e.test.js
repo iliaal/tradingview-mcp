@@ -34,6 +34,8 @@ import * as corePane from '../src/core/pane.js';
 import * as coreChart from '../src/core/chart.js';
 import * as coreDrawing from '../src/core/drawing.js';
 import * as coreWatchlist from '../src/core/watchlist.js';
+import * as corePine from '../src/core/pine.js';
+import * as coreIndicators from '../src/core/indicators.js';
 import { dismissBlockingDialogs } from '../src/core/dialog.js';
 import { disconnect as disconnectCoreClient } from '../src/connection.js';
 
@@ -208,26 +210,12 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
 
     it('tv_health_check — CDP connection + chart state', async () => {
       assert.ok(client, 'CDP client connected');
-      const state = await evaluate(`
-        (function() {
-          var result = { url: window.location.href, title: document.title };
-          try {
-            var chart = ${CHART_API};
-            result.symbol = chart.symbol();
-            result.resolution = chart.resolution();
-            result.chartType = chart.chartType();
-            result.apiAvailable = true;
-          } catch(e) {
-            result.apiAvailable = false;
-            result.apiError = e.message;
-          }
-          return result;
-        })()
-      `);
-      assert.ok(state.apiAvailable, 'Chart API available');
-      assert.ok(state.symbol, 'Has symbol');
-      assert.ok(state.resolution, 'Has resolution');
-      assert.ok(typeof state.chartType === 'number', 'Has chart type');
+      const r = await coreHealth.healthCheck();
+      assert.equal(r.success, true, 'health_check returns success');
+      assert.equal(r.api_available, true, 'Chart API available');
+      assert.ok(r.chart_symbol, 'Has symbol');
+      assert.ok(r.chart_resolution, 'Has resolution');
+      assert.ok(typeof r.chart_type === 'number', 'Has chart type');
     });
 
     it('tv_discover — report available API paths', async () => {
@@ -240,19 +228,12 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('tv_ui_state — panels, buttons, chart state', async () => {
-      const state = await evaluate(`
-        (function() {
-          var ui = {};
-          var bottom = document.querySelector('[class*="layout__area--bottom"]');
-          ui.bottom_panel = { height: bottom ? bottom.offsetHeight : 0 };
-          var right = document.querySelector('[class*="layout__area--right"]');
-          ui.right_panel = { width: right ? right.offsetWidth : 0 };
-          ui.button_count = document.querySelectorAll('button').length;
-          return ui;
-        })()
-      `);
+      const state = await coreHealth.uiState();
       assert.ok(state, 'UI state returned');
-      assert.ok(state.button_count > 0, 'Buttons found');
+      assert.equal(state.success, true);
+      // ui_state surfaces buttons by region; just verify the structure and
+      // that at least one region populated.
+      assert.ok(state.buttons && Object.keys(state.buttons).length > 0, 'Buttons grouped by region');
     });
 
     it('tv_launch — auto-detect binary (non-destructive)', async () => {
@@ -289,9 +270,11 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     let originalType;
 
     before(async () => {
-      originalSymbol = await evaluate(`${CHART_API}.symbol()`);
-      originalTF = await evaluate(`${CHART_API}.resolution()`);
-      originalType = await evaluate(`${CHART_API}.chartType()`);
+      // Use the wrapper to read original state — same code path as user tools.
+      const state = await coreChart.getState();
+      originalSymbol = state.symbol;
+      originalTF = state.resolution;
+      originalType = state.chartType;
     });
 
     after(async () => {
@@ -477,33 +460,9 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_study_values — indicator values from data window', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s.metaInfo) continue;
-            try {
-              var dwv = s.dataWindowView();
-              if (!dwv) continue;
-              var items = dwv.items();
-              if (!items) continue;
-              var vals = {};
-              for (var j = 0; j < items.length; j++) {
-                if (items[j]._value && items[j]._value !== '∅' && items[j]._title) {
-                  vals[items[j]._title] = items[j]._value;
-                }
-              }
-              if (Object.keys(vals).length > 0) {
-                results.push({ name: s.metaInfo().description, values: vals });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      assert.ok(Array.isArray(data), 'Returns array');
+      const r = await coreData.getStudyValues();
+      assert.equal(r.success, true);
+      assert.ok(Array.isArray(r.studies), 'Returns studies array');
       // May be empty if no indicators on chart — that's OK
     });
 
@@ -558,34 +517,11 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_pine_boxes — price zone boundaries', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var coll = s._graphics._primitivesCollection.dwgboxes.get('boxes').get(false);
-              if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
-                var zones = [];
-                coll._primitivesDataById.forEach(function(v) {
-                  if (v.y1 != null && v.y2 != null) {
-                    zones.push({ high: Math.max(v.y1, v.y2), low: Math.min(v.y1, v.y2) });
-                  }
-                });
-                var name = '';
-                try { name = s.metaInfo().description; } catch(e) {}
-                results.push({ name: name, zones: zones });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      assert.ok(Array.isArray(data), 'Returns array');
-      if (data.length > 0) {
-        assert.ok(Array.isArray(data[0].zones), 'Has zones array');
+      const r = await coreData.getPineBoxes({});
+      assert.equal(r.success, true);
+      assert.ok(Array.isArray(r.studies), 'Returns studies array');
+      if (r.studies.length > 0) {
+        assert.ok(Array.isArray(r.studies[0].zones), 'Has zones array');
       }
     });
 
@@ -610,8 +546,9 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_strategy_results — strategy metrics (panel-dependent)', async () => {
-      // Open strategy tester panel
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      // Open strategy tester via the wrapper — BOTTOM_BAR.showWidget is a
+      // silent no-op on TV 3.1.0; ui.openPanel uses the working button-click path.
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
 
       const data = await evaluate(`
@@ -623,30 +560,27 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       `);
       assert.ok(typeof data.panel_found === 'boolean', 'Strategy panel detection works');
 
-      // Close it
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_trades — trade list (panel-dependent)', async () => {
-      // Similar to strategy_results — verify panel detection
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
       const panelExists = await evaluate(`
         !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
       `);
       assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_equity — equity curve (panel-dependent)', async () => {
-      // Same pattern — just verify the panel access path works
-      await evaluate(`try { ${BOTTOM_BAR}.showWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
       const panelExists = await evaluate(`
         !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
       `);
       assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
-      await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
+      try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_pine_shapes — read plotshape markers (B.12)', async () => {
@@ -763,16 +697,10 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     it('pine_get_source — read editor code', async () => {
       const ready = await ensureEditor();
       if (!ready) return; // Skip if editor can't be opened
-      const source = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return null;
-          return m.editor.getValue();
-        })()
-      `);
+      const r = await corePine.getSource();
       // Source might be null if Monaco fiber path changed
-      if (source !== null) {
-        assert.ok(typeof source === 'string', 'Source is string');
+      if (r.source !== null && r.source !== undefined) {
+        assert.ok(typeof r.source === 'string', 'Source is string');
       }
     });
 
@@ -780,20 +708,13 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       const ready = await ensureEditor();
       if (!ready) return;
       const testCode = '//@version=6\nindicator("E2E Test", overlay=true)\nplot(close)';
-      const set = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return false;
-          m.editor.setValue(${JSON.stringify(testCode)});
-          return true;
-        })()
-      `);
-      if (set) {
-        const readBack = await evaluate(`
-          (function() { var m = ${FIND_MONACO}; return m ? m.editor.getValue() : null; })()
-        `);
-        assert.ok(readBack && readBack.includes('E2E Test'), 'Source was set');
+      try {
+        await corePine.setSource({ source: testCode });
+      } catch {
+        return; // wrapper threw — Monaco fiber path may have changed
       }
+      const r = await corePine.getSource();
+      assert.ok(r.source && r.source.includes('E2E Test'), 'Source was set');
     });
 
     it('pine_compile — add to chart button', async () => {
@@ -835,30 +756,16 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     it('pine_get_errors — Monaco markers', async () => {
       const ready = await ensureEditor();
       if (!ready) return;
-      const errors = await evaluate(`
-        (function() {
-          var m = ${FIND_MONACO};
-          if (!m) return [];
-          var model = m.editor.getModel();
-          if (!model) return [];
-          return m.env.editor.getModelMarkers({ resource: model.uri }).map(function(mk) {
-            return { line: mk.startLineNumber, message: mk.message, severity: mk.severity };
-          });
-        })()
-      `);
-      assert.ok(Array.isArray(errors), 'Errors array returned');
+      const r = await corePine.getErrors();
+      assert.ok(Array.isArray(r.errors), 'Errors array returned');
     });
 
     it('pine_get_console — log output', async () => {
       const ready = await ensureEditor();
       if (!ready) return;
-      const entries = await evaluate(`
-        (function() {
-          var rows = document.querySelectorAll('[class*="consoleRow"], [class*="log-"], [class*="consoleLine"]');
-          return rows.length;
-        })()
-      `);
-      assert.ok(typeof entries === 'number', 'Console row count returned');
+      const r = await corePine.getConsole();
+      assert.ok(r, 'Console wrapper returned a result');
+      assert.ok(Array.isArray(r.entries) || typeof r.entry_count === 'number', 'Has entries or count');
     });
 
     it('pine_save — Ctrl+S dispatch', async () => {
@@ -966,11 +873,12 @@ val = array.get(a, 5)`;
   describe('Drawing', () => {
 
     after(async () => {
-      // Clean up all drawings
-      try { await evaluate(`${CHART_API}.removeAllShapes()`); } catch {}
+      // Clean up all drawings via the wrapper.
+      try { await coreDrawing.clearAll(); } catch {}
     });
 
     it('draw_shape — create horizontal line', async () => {
+      // Use the last bar's close as the point for a horizontal line.
       const quote = await evaluate(`
         (function() {
           var bars = ${BARS_PATH};
@@ -980,63 +888,44 @@ val = array.get(a, 5)`;
       `);
       if (!quote) return;
 
-      const result = await evaluate(`
-        (function() {
-          var api = ${CHART_API};
-          var id = api.createShape(
-            { time: ${quote.time}, price: ${quote.price} },
-            { shape: 'horizontal_line', overrides: {} }
-          );
-          return { entity_id: id };
-        })()
-      `);
-      assert.ok(result, 'Shape created');
+      const result = await coreDrawing.drawShape({
+        shape: 'horizontal_line',
+        point: { time: quote.time, price: quote.price },
+      });
+      assert.ok(result.success, 'Shape created');
       assert.ok(result.entity_id, 'Has entity_id');
     });
 
     it('draw_list — list drawings', async () => {
-      const shapes = await evaluate(`
-        (function() {
-          var all = ${CHART_API}.getAllShapes();
-          return all.map(function(s) { return { id: s.id, name: s.name }; });
-        })()
-      `);
-      assert.ok(Array.isArray(shapes), 'Shapes is array');
-      assert.ok(shapes.length > 0, 'Has at least one shape');
+      const r = await coreDrawing.listDrawings();
+      assert.ok(r.success, 'list returned success');
+      assert.ok(Array.isArray(r.shapes), 'shapes is array');
+      assert.ok(r.shapes.length > 0, 'Has at least one shape');
     });
 
     it('draw_get_properties — read shape details', async () => {
-      const shapes = await evaluate(`${CHART_API}.getAllShapes()`);
-      if (!shapes || shapes.length === 0) return;
+      const list = await coreDrawing.listDrawings();
+      if (!list.shapes || list.shapes.length === 0) return;
+      const id = list.shapes[0].id;
 
-      const result = await evaluate(`
-        (function() {
-          var api = ${CHART_API};
-          var shape = api.getShapeById('${shapes[0].id}');
-          if (!shape) return { error: 'not found' };
-          var props = {};
-          try { props.points = shape.getPoints(); } catch(e) {}
-          try { props.visible = shape.isVisible(); } catch(e) {}
-          return props;
-        })()
-      `);
+      const result = await coreDrawing.getProperties({ entity_id: id });
       assert.ok(result, 'Properties returned');
-      assert.ok(!result.error, 'No error');
+      assert.equal(result.success, true, 'No error');
     });
 
     it('draw_remove_one — remove single drawing', async () => {
-      const shapes = await evaluate(`${CHART_API}.getAllShapes()`);
-      if (!shapes || shapes.length === 0) return;
+      const list = await coreDrawing.listDrawings();
+      if (!list.shapes || list.shapes.length === 0) return;
 
-      const id = shapes[0].id;
-      await evaluate(`${CHART_API}.removeEntity('${id}')`);
-      const after = await evaluate(`${CHART_API}.getAllShapes()`);
-      const stillExists = after.some(s => s.id === id);
+      const id = list.shapes[0].id;
+      await coreDrawing.removeOne({ entity_id: id });
+      const after = await coreDrawing.listDrawings();
+      const stillExists = (after.shapes || []).some(s => s.id === id);
       assert.ok(!stillExists, 'Shape removed');
     });
 
     it('draw_clear — remove all drawings', async () => {
-      // Add a shape first
+      // Add a shape first via the wrapper, then clear.
       const quote = await evaluate(`
         (function() {
           var bars = ${BARS_PATH};
@@ -1045,12 +934,15 @@ val = array.get(a, 5)`;
         })()
       `);
       if (quote) {
-        await evaluate(`${CHART_API}.createShape({ time: ${quote.time}, price: ${quote.price} }, { shape: 'horizontal_line' })`);
+        await coreDrawing.drawShape({
+          shape: 'horizontal_line',
+          point: { time: quote.time, price: quote.price },
+        });
       }
 
-      await evaluate(`${CHART_API}.removeAllShapes()`);
-      const after = await evaluate(`${CHART_API}.getAllShapes()`);
-      assert.equal(after.length, 0, 'All shapes cleared');
+      await coreDrawing.clearAll();
+      const after = await coreDrawing.listDrawings();
+      assert.equal((after.shapes || []).length, 0, 'All shapes cleared');
     });
   });
 
@@ -1385,42 +1277,35 @@ val = array.get(a, 5)`;
   describe('Indicators', () => {
 
     it('indicator_toggle_visibility — show/hide study', async () => {
-      const studies = await evaluate(`${CHART_API}.getAllStudies()`);
-      if (!studies || studies.length === 0) return;
-
+      const state = await coreChart.getState();
+      const studies = state.studies || [];
+      if (studies.length === 0) return;
       const id = studies[0].id;
-      const result = await evaluate(`
-        (function() {
-          var study = ${CHART_API}.getStudyById('${id}');
-          if (!study) return { error: 'not found' };
-          var was = study.isVisible();
-          study.setVisible(!was);
-          var now = study.isVisible();
-          study.setVisible(was); // restore
-          return { was: was, toggled: now, restored: study.isVisible() };
-        })()
-      `);
-      if (!result.error) {
-        assert.notEqual(result.was, result.toggled, 'Visibility toggled');
-        assert.equal(result.was, result.restored, 'Visibility restored');
-      }
+
+      // Read current state via the data wrapper, toggle via the indicator
+      // wrapper, verify the toggle landed, then restore.
+      const before = await coreData.getIndicator({ entity_id: id });
+      const wasVisible = before.visible !== false;
+
+      const toggled = await coreIndicators.toggleVisibility({ entity_id: id, visible: !wasVisible });
+      assert.equal(toggled.success, true);
+      assert.equal(toggled.visible, !wasVisible, 'Visibility flipped');
+
+      // Restore original state.
+      const restored = await coreIndicators.toggleVisibility({ entity_id: id, visible: wasVisible });
+      assert.equal(restored.visible, wasVisible, 'Visibility restored');
     });
 
-    it('indicator_set_inputs — change study parameters', async () => {
-      const studies = await evaluate(`${CHART_API}.getAllStudies()`);
-      if (!studies || studies.length === 0) return;
-
+    it('indicator_set_inputs — read existing inputs via data wrapper', async () => {
+      const state = await coreChart.getState();
+      const studies = state.studies || [];
+      if (studies.length === 0) return;
       const id = studies[0].id;
-      const result = await evaluate(`
-        (function() {
-          var study = ${CHART_API}.getStudyById('${id}');
-          if (!study) return { error: 'not found' };
-          var inputs = study.getInputValues();
-          return { input_count: inputs.length, first_input: inputs[0] || null };
-        })()
-      `);
-      assert.ok(result, 'Input values retrieved');
-      assert.ok(typeof result.input_count === 'number', 'Has input count');
+
+      const r = await coreData.getIndicator({ entity_id: id });
+      assert.equal(r.success, true);
+      assert.equal(r.entity_id, id);
+      assert.ok(Array.isArray(r.inputs), 'Has inputs array');
     });
   });
 
@@ -1431,10 +1316,10 @@ val = array.get(a, 5)`;
     it('batch_run — verify symbol/tf switching mechanism', async () => {
       // batch_run iterates symbols + timeframes, sets each, then runs an action.
       // We test the underlying switching mechanism without running a full batch.
-      const original = await evaluate(`${CHART_API}.symbol()`);
-      assert.ok(original, 'Can read current symbol for batch switching');
+      const state = await coreChart.getState();
+      assert.ok(state.symbol, 'Can read current symbol for batch switching');
 
-      // Verify setSymbol exists
+      // Verify the batch wrapper's prerequisite TV API methods exist.
       const hasSetSymbol = await evaluate(`typeof ${CHART_API}.setSymbol === 'function'`);
       assert.ok(hasSetSymbol, 'setSymbol available for batch operations');
 
@@ -1481,99 +1366,42 @@ val = array.get(a, 5)`;
 
   describe('Context Size Validation', () => {
 
-    it('quote_get output < 500 bytes', async () => {
+    it('quote_get output < 1KB', async () => {
+      // 1KB threshold (was 500 bytes originally). The bound was bumped after
+      // observing real symbolExt() payloads on equities pull description and
+      // exchange strings that, with bid/ask attached, push a quote past 500
+      // bytes for many symbols. 1024 leaves comfortable headroom over the
+      // ~400-byte typical case without losing the context-cost signal —
+      // anything that doubles past 1KB is a genuine regression worth
+      // catching.
       const r = await coreData.getQuote({});
       const size = JSON.stringify(r, null, 2).length;
-      // The threshold has drifted as TV exposes more fields. Anything under
-      // 1KB is fine for context-cost purposes.
       assert.ok(size < 1024, `quote_get output is ${size} bytes (target < 1024)`);
     });
 
+    // The size-budget tests below validate that the wrapper's compaction
+    // logic produces output within reasonable limits for real chart state.
+    // Earlier these tests re-implemented the wrapper's IIFE inline, which
+    // meant a wrapper bug (e.g. missing inner.get(false)) propagated into
+    // the test and silently passed. Calling the wrapper itself ties the
+    // budget assertion to what users actually receive.
     it('data_get_study_values output < 2KB', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s.metaInfo) continue;
-            try {
-              var dwv = s.dataWindowView();
-              if (!dwv) continue;
-              var items = dwv.items();
-              if (!items) continue;
-              var vals = {};
-              for (var j = 0; j < items.length; j++) {
-                if (items[j]._value && items[j]._value !== '∅' && items[j]._title) {
-                  vals[items[j]._title] = items[j]._value;
-                }
-              }
-              if (Object.keys(vals).length > 0) {
-                results.push({ name: s.metaInfo().description, values: vals });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      const size = JSON.stringify({ success: true, studies: data }, null, 2).length;
-      assert.ok(size < 2048, `data_get_study_values output is ${size} bytes (< 2KB)`);
+      const r = await coreData.getStudyValues();
+      const size = JSON.stringify(r, null, 2).length;
+      assert.ok(size < 2048, `getStudyValues output is ${size} bytes (< 2KB)`);
     });
 
     it('pine lines compact < 4KB per study', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var name = s.metaInfo().description || '';
-              var coll = s._graphics._primitivesCollection.dwglines.get('lines').get(false);
-              if (!coll || !coll._primitivesDataById || coll._primitivesDataById.size === 0) continue;
-              var seen = {}, prices = [];
-              coll._primitivesDataById.forEach(function(v) {
-                var y = v.y1 != null && v.y1 === v.y2 ? Math.round(v.y1 * 100) / 100 : null;
-                if (y != null && !seen[y]) { prices.push(y); seen[y] = true; }
-              });
-              prices.sort(function(a,b) { return b - a; });
-              results.push({ name: name, horizontal_levels: prices });
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      for (const study of data) {
+      const r = await coreData.getPineLines({});
+      for (const study of r.studies || []) {
         const size = JSON.stringify(study).length;
         assert.ok(size < 4096, `${study.name}: pine lines ${size} bytes (< 4KB)`);
       }
     });
 
     it('pine labels compact < 8KB per study', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var name = s.metaInfo().description || '';
-              var coll = s._graphics._primitivesCollection.dwglabels.get('labels').get(false);
-              if (!coll || !coll._primitivesDataById || coll._primitivesDataById.size === 0) continue;
-              var labels = [];
-              coll._primitivesDataById.forEach(function(v) {
-                if (v.t || v.y != null) labels.push({ text: v.t || '', price: v.y != null ? Math.round(v.y * 100) / 100 : null });
-              });
-              if (labels.length > 50) labels = labels.slice(-50);
-              results.push({ name: name, labels: labels });
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      for (const study of data) {
+      const r = await coreData.getPineLabels({});
+      for (const study of r.studies || []) {
         const size = JSON.stringify(study).length;
         assert.ok(size < 8192, `${study.name}: pine labels ${size} bytes (< 8KB)`);
       }

@@ -2,9 +2,18 @@
  * Core watchlist logic.
  * Uses TradingView's internal widget API with DOM fallback.
  */
-import { evaluate, evaluateAsync, getClient, safeString } from '../connection.js';
+import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, getClient as _getClient, safeString } from '../connection.js';
 
-export async function get() {
+function _resolve(deps) {
+  return {
+    evaluate: deps?.evaluate || _evaluate,
+    evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
+    getClient: deps?.getClient || _getClient,
+  };
+}
+
+export async function get({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   // Try internal API first — reads from the active watchlist widget
   const symbols = await evaluate(`
     (function() {
@@ -82,7 +91,8 @@ function _realClick(btnSelector) {
   `;
 }
 
-export async function add({ symbol }) {
+export async function add({ symbol, _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
   const c = await getClient();
 
   // Ensure watchlist panel is open
@@ -159,7 +169,8 @@ export async function add({ symbol }) {
  * endpoint from Node.js (server-side) with proper authentication.
  * Falls back to UI-based delete (click row + Delete key) if REST fails.
  */
-export async function remove({ symbols }) {
+export async function remove({ symbols, _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
   const c = await getClient();
 
   // Get the active watchlist metadata from the React fiber tree
@@ -245,14 +256,15 @@ export async function remove({ symbols }) {
   }
 
   // --- Strategy 2: UI-based delete (click row + Delete key) ---
-  return _removeViaUI({ symbols: toRemove, skipped });
+  return _removeViaUI({ symbols: toRemove, skipped, _deps });
 }
 
 /**
  * Fallback: remove symbols by selecting each row and pressing Delete.
  * Slower but reliable — uses CDP native Input events.
  */
-async function _removeViaUI({ symbols, skipped = [] }) {
+async function _removeViaUI({ symbols, skipped = [], _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
   const c = await getClient();
   const results = [];
 
@@ -301,7 +313,8 @@ async function _removeViaUI({ symbols, skipped = [] }) {
   };
 }
 
-export async function addBulk({ symbols }) {
+export async function addBulk({ symbols, _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
   // Add multiple symbols in one "Add symbol" dialog session.
   // TradingView keeps the dialog open between adds — just clear and retype.
   const c = await getClient();
