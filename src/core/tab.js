@@ -95,9 +95,14 @@ export async function switchTab({ index }) {
 
   const target = tabs.tabs[idx];
 
-  // Activate the tab visually and reconnect CDP client to the new target
+  // Activate the tab visually and reconnect CDP client to the new target.
+  // Use CDP Target.activateTarget rather than the /json/activate REST hook —
+  // Electron honors the CDP method but ignores the REST call for visual focus
+  // changes, so the user sees the tab "switch" but the active widget stays
+  // on the previous one until reload.
   try {
-    await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/activate/${target.id}`);
+    const currentClient = await getClient();
+    await currentClient.Target.activateTarget({ targetId: target.id });
     await new Promise(r => setTimeout(r, 500));
     await connectToTarget(target.id);
     return { success: true, action: 'switched', index: idx, tab_id: target.id, chart_id: target.chart_id };
