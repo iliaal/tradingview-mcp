@@ -517,6 +517,7 @@ export async function getConsole() {
 }
 
 export async function smartCompile() {
+  const startedAt = Date.now();
   const editorReady = await ensurePineEditorOpen();
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
@@ -595,6 +596,7 @@ export async function smartCompile() {
     has_errors: errors?.length > 0,
     errors: errors || [],
     study_added: studyAdded,
+    elapsed_ms: Date.now() - startedAt,
   };
 }
 

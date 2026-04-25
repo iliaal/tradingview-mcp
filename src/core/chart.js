@@ -3,6 +3,7 @@
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, safeString, requireFinite } from '../connection.js';
 import { waitForChartReady as _waitForChartReady, waitForStudiesReady as _waitForStudiesReady } from '../wait.js';
+import { dismissBlockingDialogs as _dismissBlockingDialogs } from './dialog.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 
@@ -12,7 +13,20 @@ function _resolve(deps) {
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
     waitForStudiesReady: deps?.waitForStudiesReady || _waitForStudiesReady,
+    dismissBlockingDialogs: deps?.dismissBlockingDialogs || _dismissBlockingDialogs,
   };
+}
+
+/**
+ * Compare a requested symbol against the actual chart symbol. TV resolves
+ * 'AAPL' to 'NASDAQ:AAPL' or 'BATS:AAPL' depending on availability, so we
+ * accept any actual that matches case-insensitively after stripping the
+ * exchange prefix on either side.
+ */
+function _symbolMatches(requested, actual) {
+  if (!actual) return false;
+  const norm = (s) => String(s).split(':').pop().toUpperCase();
+  return norm(actual) === norm(requested);
 }
 
 export async function getState({ _deps } = {}) {
@@ -39,19 +53,61 @@ export async function getState({ _deps } = {}) {
 }
 
 export async function setSymbol({ symbol, _deps }) {
-  const { evaluateAsync, waitForChartReady, waitForStudiesReady } = _resolve(_deps);
-  await evaluateAsync(`
-    (function() {
-      var chart = ${CHART_API};
-      return new Promise(function(resolve) {
-        chart.setSymbol(${safeString(symbol)}, {});
-        setTimeout(resolve, 500);
-      });
-    })()
-  `);
-  const ready = await waitForChartReady(symbol);
+  const { evaluate, evaluateAsync, waitForChartReady, waitForStudiesReady, dismissBlockingDialogs } = _resolve(_deps);
+
+  async function _doSetSymbol() {
+    await evaluateAsync(`
+      (function() {
+        var chart = ${CHART_API};
+        return new Promise(function(resolve) {
+          chart.setSymbol(${safeString(symbol)}, {});
+          setTimeout(resolve, 500);
+        });
+      })()
+    `);
+    return await waitForChartReady(symbol);
+  }
+
+  // First attempt
+  let ready = await _doSetSymbol();
+  let actual = await evaluate(`${CHART_API}.symbol()`);
+  let dismissedDialogs = [];
+
+  // If the symbol didn't actually change, TV likely popped a blocking modal
+  // (Leave current replay / Continue your last replay / Save script /
+  // unsaved changes) that absorbed the change request. Dismiss whatever's
+  // open and retry once.
+  if (!_symbolMatches(symbol, actual)) {
+    try { dismissedDialogs = await dismissBlockingDialogs({ evaluate }); } catch {}
+    await new Promise(r => setTimeout(r, 500));
+    ready = await _doSetSymbol();
+    actual = await evaluate(`${CHART_API}.symbol()`);
+  }
+
+  if (!_symbolMatches(symbol, actual)) {
+    const err = new Error(
+      `setSymbol failed: requested "${symbol}" but chart symbol is "${actual}". ` +
+      (dismissedDialogs.length
+        ? `Dismissed dialogs (${dismissedDialogs.map(d => d.note).join(', ')}) on retry but the change still didn't take. `
+        : `No blocking dialog was detected. `) +
+      `TV may be in a stuck saved-replay state — try replay_stop or restarting TV.`
+    );
+    err.code = 'SYMBOL_DID_NOT_CHANGE';
+    err.requested = symbol;
+    err.actual = actual;
+    err.dismissed_dialogs = dismissedDialogs;
+    throw err;
+  }
+
   const studies_ready = await waitForStudiesReady();
-  return { success: true, symbol, chart_ready: ready, studies_ready };
+  return {
+    success: true,
+    symbol: actual,
+    requested: symbol,
+    chart_ready: ready,
+    studies_ready,
+    dismissed_dialogs: dismissedDialogs.length ? dismissedDialogs : undefined,
+  };
 }
 
 export async function setTimeframe({ timeframe, _deps }) {

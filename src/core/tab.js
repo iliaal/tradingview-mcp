@@ -2,19 +2,64 @@
  * Core tab management logic.
  * Controls TradingView Desktop tabs via CDP and Electron keyboard shortcuts.
  */
+import CDP from 'chrome-remote-interface';
 import { getClient, evaluate, connectToTarget } from '../connection.js';
 
 const CDP_HOST = process.env.TV_CDP_HOST || 'localhost';
 const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
 
 /**
- * List all open chart tabs (CDP page targets).
+ * Open a short-lived CDP client for a specific target and read its Pine
+ * editor's currently-active script name (if any). Returns null when the
+ * Pine editor isn't open in that tab or the read fails.
+ *
+ * Walks the title-button DOM rather than a JS API since the latter requires
+ * the React fiber dance our FIND_MONACO does, which is slow per-tab. The
+ * title button is a single querySelector; we grab its h2 textContent.
+ *
+ * cdpFactory is injectable for tests — defaults to chrome-remote-interface's
+ * CDP() function.
  */
-export async function list() {
+async function _readActivePineScript(targetId, cdpFactory = CDP) {
+  let c;
+  try {
+    c = await cdpFactory({ host: CDP_HOST, port: CDP_PORT, target: targetId });
+    await c.Runtime.enable();
+    const { result } = await c.Runtime.evaluate({
+      expression: `
+        (function() {
+          var btn = document.querySelector('[data-qa-id="pine-script-title-button"]');
+          if (!btn) return null;
+          var h2 = btn.querySelector('h2') || btn;
+          var name = (h2.textContent || '').trim();
+          return name || null;
+        })()
+      `,
+      returnByValue: true,
+    });
+    return result?.value || null;
+  } catch {
+    return null;
+  } finally {
+    if (c) try { await c.close(); } catch {}
+  }
+}
+
+/**
+ * List all open chart tabs (CDP page targets). Each entry includes the
+ * tab's currently-active Pine script name when readable; null when the
+ * Pine editor isn't open in that tab.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.include_pine_script=true] - probe each tab's Pine
+ *   title button. Adds ~50ms per tab; pass false for a faster bare list.
+ */
+export async function list({ include_pine_script = true, _deps } = {}) {
+  const cdpFactory = _deps?.cdpFactory || CDP;
   const resp = await fetch(`http://${CDP_HOST}:${CDP_PORT}/json/list`);
   const targets = await resp.json();
 
-  const tabs = targets
+  const baseTabs = targets
     .filter(t => t.type === 'page' && /tradingview\.com\/chart/i.test(t.url))
     .map((t, i) => ({
       index: i,
@@ -23,6 +68,14 @@ export async function list() {
       url: t.url,
       chart_id: t.url.match(/\/chart\/([^/?]+)/)?.[1] || null,
     }));
+
+  let tabs = baseTabs;
+  if (include_pine_script && baseTabs.length > 0) {
+    // Fan out per-tab Pine reads in parallel — each is its own
+    // short-lived CDP connection so they don't serialize.
+    const pineNames = await Promise.all(baseTabs.map(t => _readActivePineScript(t.id, cdpFactory)));
+    tabs = baseTabs.map((t, i) => ({ ...t, pine_script: pineNames[i] }));
+  }
 
   return { success: true, tab_count: tabs.length, tabs };
 }
@@ -86,7 +139,7 @@ export async function closeTab() {
  * Switch to a tab by index. Reconnects CDP to the new target.
  */
 export async function switchTab({ index }) {
-  const tabs = await list();
+  const tabs = await list({ include_pine_script: false });
   const idx = Number(index);
 
   if (idx >= tabs.tab_count) {
@@ -109,4 +162,42 @@ export async function switchTab({ index }) {
   } catch (e) {
     throw new Error(`Failed to activate tab ${idx}: ${e.message}`);
   }
+}
+
+/**
+ * Switch to a tab by Pine script name. Useful when tab indices shift across
+ * sessions but the user knows the script title in the editor.
+ *
+ * Strategy: list all tabs (with Pine script reads), find the first whose
+ * pine_script matches `name` exactly (case-insensitive), then delegate to
+ * switchTab(index). Falls back to substring match if no exact hit. Throws
+ * with the available script names when nothing matches.
+ */
+export async function switchTabByName({ name, _deps } = {}) {
+  if (!name || typeof name !== 'string') {
+    throw new Error('name (string) is required');
+  }
+  const tabs = await list({ include_pine_script: true, _deps });
+  const target = name.toLowerCase();
+
+  // Exact match first
+  let match = tabs.tabs.find(t => (t.pine_script || '').toLowerCase() === target);
+  // Fuzzy fallback: substring
+  if (!match) {
+    match = tabs.tabs.find(t => (t.pine_script || '').toLowerCase().includes(target));
+  }
+
+  if (!match) {
+    const available = tabs.tabs
+      .map(t => t.pine_script)
+      .filter(Boolean);
+    throw new Error(
+      `No tab found with Pine script "${name}". ` +
+      (available.length
+        ? `Available scripts: ${available.join(', ')}.`
+        : `No tabs have a Pine script open.`),
+    );
+  }
+
+  return switchTab({ index: match.index });
 }
