@@ -310,8 +310,55 @@ export async function launch({ port, kill_existing } = {}) {
     child = spawn('powershell.exe', ['-NoProfile', '-Command', psCmd], { detached: true, stdio: 'ignore' });
     child.unref();
   } else {
-    child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: 'ignore' });
-    child.unref();
+    // Try direct spawn first. On TradingView v2.14.0+ (Electron 38 / Node 22),
+    // direct invocation may reject --remote-debugging-port as an unknown CLI
+    // flag before Chromium can process it. We watch stderr + exit for a short
+    // window and fall back to a platform-specific path when that happens.
+    child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const spawnFailed = await new Promise((resolve) => {
+      let settled = false;
+      const settle = (val) => { if (!settled) { settled = true; resolve(val); } };
+      try { child.stderr && child.stderr.on('data', () => {}); } catch {}
+      child.on('error', () => { clearTimeout(timer); settle(true); });
+      child.on('exit', (code) => {
+        if (code !== null && code !== 0) { clearTimeout(timer); settle(true); }
+      });
+      const timer = setTimeout(() => {
+        try { child.stderr && child.stderr.destroy(); } catch {}
+        settle(false);
+      }, 2000);
+    });
+
+    if (spawnFailed) {
+      child = null;
+      if (platform === 'darwin') {
+        // open -a only attaches args to a fresh launch — kill any running TV
+        // first or it just reactivates the existing (no-CDP) window.
+        try { execSync('pkill -f TradingView', { timeout: 5000, stdio: 'ignore' }); } catch {}
+        await new Promise(r => setTimeout(r, 2000));
+        const appMatch = tvPath.match(/^(.+\.app)\//);
+        if (appMatch) {
+          const appBundle = appMatch[1];
+          try {
+            execSync(`open -a "${appBundle.split('"').join('')}" --args --remote-debugging-port=${cdpPort}`, { timeout: 5000, stdio: 'ignore' });
+          } catch { /* open returns non-zero even on success sometimes */ }
+        } else {
+          // No .app bundle — last resort: bare launch.
+          const fb = spawn(tvPath, [], { detached: true, stdio: 'ignore' });
+          fb.unref();
+        }
+      } else {
+        // Linux / Windows fallback: env-var hint + bare launch in case TV
+        // accepts the flag via env even when CLI parsing rejects it.
+        const fallback = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], {
+          detached: true, stdio: 'ignore',
+          env: { ...process.env, REMOTE_DEBUGGING_PORT: String(cdpPort) },
+        });
+        fallback.unref();
+      }
+    } else {
+      child.unref();
+    }
   }
 
   for (let i = 0; i < 15; i++) {
