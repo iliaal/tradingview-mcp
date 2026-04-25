@@ -685,15 +685,31 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     after(async () => {
-      // Pine compile/add-to-chart leaves a "Save script?" dialog open when
-      // the script is unsaved. Cancel it before moving on so subsequent
-      // chart-mutating tests don't inherit a blocking modal.
+      // Cleanup hierarchy — each step in its own try/catch so a failure in
+      // one doesn't skip the rest. Pine compile/add-to-chart leaves a
+      // "Save script?" dialog open when the script is unsaved; we
+      // dismiss it twice using both pattern-set sources, then run an
+      // Escape-key fallback for any leftover overlay before closing the
+      // editor.
+
+      // Step 1: dismiss known blocking dialogs (text-pattern matchers)
       try { await dismissDialogs(); } catch {}
       try { await dismissBlockingDialogs(); } catch {}
-      // Restore editor state
+
+      // Step 2: re-attempt for any modal that appeared between calls
+      try { await new Promise(r => setTimeout(r, 200)); } catch {}
+      try { await dismissBlockingDialogs(); } catch {}
+
+      // Step 3: Escape any remaining unrecognized overlay
+      try {
+        await Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      } catch {}
+
+      // Step 4: restore editor state — close it if we opened it
       if (!editorWasOpen) {
         try { await coreUi.openPanel({ panel: 'pine-editor', action: 'close' }); } catch {}
-        await sleep(300);
+        try { await sleep(300); } catch {}
       }
     });
 

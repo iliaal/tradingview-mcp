@@ -12,15 +12,24 @@ import { drawShape } from '../src/core/drawing.js';
 
 // ── Mock helpers ─────────────────────────────────────────────────────────
 
-function mockEval() {
+function mockEval(opts = {}) {
   const calls = [];
-  const fn = async (expr) => { calls.push(expr); return undefined; };
+  const symbolEcho = opts.symbolEcho;
+  const fn = async (expr) => {
+    calls.push(expr);
+    // setSymbol's post-call verification reads `<chart>.symbol()`.
+    // Echo back the test's expected symbol so the equality check passes.
+    if (symbolEcho && typeof expr === 'string' && /\.symbol\(\)/.test(expr) && !expr.includes('setSymbol')) {
+      return symbolEcho;
+    }
+    return undefined;
+  };
   fn.calls = calls;
   return fn;
 }
 
 function mockDeps(overrides = {}) {
-  const evaluate = mockEval();
+  const evaluate = mockEval({ symbolEcho: overrides.symbolEcho });
   return {
     _deps: {
       evaluate,
@@ -28,6 +37,11 @@ function mockDeps(overrides = {}) {
       waitForChartReady: async () => true,
       waitForStudiesReady: async () => true,
       getChartApi: async () => 'window.__api',
+      // setSymbol calls dismissBlockingDialogs only on retry (when verify
+      // fails). Provide a no-op so tests that mock symbolEcho never reach
+      // the retry path; for the no-echo case this returns [] and the
+      // throw includes the dismissed_dialogs key.
+      dismissBlockingDialogs: async () => [],
       ...overrides,
     },
     evaluate,
@@ -131,7 +145,7 @@ describe('requireFinite() — numeric validation', () => {
 
 describe('chart.js — sanitized evaluate calls', () => {
   it('setSymbol uses safeString in evaluate', async () => {
-    const { _deps, evaluate } = mockDeps();
+    const { _deps, evaluate } = mockDeps({ symbolEcho: 'NYMEX:CL1!' });
     await setSymbol({ symbol: "NYMEX:CL1!", _deps });
     const call = evaluate.calls.find(c => c.includes('setSymbol'));
     assert.ok(call, 'setSymbol called');
@@ -140,8 +154,8 @@ describe('chart.js — sanitized evaluate calls', () => {
   });
 
   it('setSymbol sanitizes injection payload', async () => {
-    const { _deps, evaluate } = mockDeps();
     const payload = "'; alert('xss'); //";
+    const { _deps, evaluate } = mockDeps({ symbolEcho: payload });
     await setSymbol({ symbol: payload, _deps });
     const call = evaluate.calls.find(c => c.includes('setSymbol'));
     // Payload must be wrapped in JSON.stringify output — double-quoted, escaped

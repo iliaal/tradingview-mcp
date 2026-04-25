@@ -906,7 +906,7 @@ export async function batchReadPanes({ indices, reads, wait_ms } = {}) {
                   'text': 'text', 'note': 'note', 'callout': 'callout',
                   'arrow': 'arrow', 'price label': 'price_label', 'price range': 'price_range',
                 };
-                canon = nameMap[n] || n.replace(/\s+/g, '_');
+                canon = nameMap[n] || n.replace(/\\s+/g, '_');
               }
               if (canon) entry.type = canon;
               var pts = safeCall(s, 'points');

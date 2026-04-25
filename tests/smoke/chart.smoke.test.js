@@ -6,6 +6,102 @@ import assert from 'node:assert/strict';
 import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import * as chart from '../../src/core/chart.js';
 
+describe('core/chart.js — setSymbol verification (post-call retry)', () => {
+  afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
+
+  it('test_setSymbol_throws_when_change_silently_failed', async () => {
+    // Simulate TV in a stuck state: setSymbol's IIFE returns OK but the
+    // actual symbol stays the same (reproducer for the cascading-failures
+    // scenario from saved replay state). The wrapper detects this, retries
+    // once after dismissing dialogs, then throws with SYMBOL_DID_NOT_CHANGE.
+    let dismissedCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)/.test(expr) && !expr.includes('setSymbol')) {
+          return 'CME_MINI:ESM2026'; // stuck — never changes
+        }
+        return undefined;
+      },
+      evaluateAsync: async () => undefined,
+    });
+    await assert.rejects(
+      chart.setSymbol({
+        symbol: 'NASDAQ:AAPL',
+        _deps: {
+          waitForChartReady: async () => true,
+          waitForStudiesReady: async () => true,
+          dismissBlockingDialogs: async () => { dismissedCalls++; return [{ note: 'leave_replay', button: 'Leave' }]; },
+        },
+      }),
+      (err) => {
+        assert.equal(err.code, 'SYMBOL_DID_NOT_CHANGE');
+        assert.equal(err.requested, 'NASDAQ:AAPL');
+        assert.equal(err.actual, 'CME_MINI:ESM2026');
+        assert.deepEqual(err.dismissed_dialogs, [{ note: 'leave_replay', button: 'Leave' }]);
+        return true;
+      },
+    );
+    assert.equal(dismissedCalls, 1, 'dismissBlockingDialogs invoked exactly once on retry');
+  });
+
+  it('test_setSymbol_succeeds_when_actual_matches_after_normalize', async () => {
+    // TV resolves 'AAPL' to 'NASDAQ:AAPL' or 'BATS:AAPL'; the verify check
+    // strips the exchange prefix before comparing.
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)/.test(expr) && !expr.includes('setSymbol')) {
+          return 'BATS:AAPL';
+        }
+        return undefined;
+      },
+      evaluateAsync: async () => undefined,
+    });
+    const r = await chart.setSymbol({
+      symbol: 'AAPL',
+      _deps: {
+        waitForChartReady: async () => true,
+        waitForStudiesReady: async () => true,
+        dismissBlockingDialogs: async () => [],
+      },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.symbol, 'BATS:AAPL');
+    assert.equal(r.requested, 'AAPL');
+  });
+
+  it('test_setSymbol_succeeds_after_retry_dismissing_dialog', async () => {
+    // First .symbol() check returns the old symbol (TV stuck on a dialog).
+    // Dialog dismissed → retry sets the symbol → second .symbol() returns
+    // the new value. The retry path takes the wrapper to success.
+    let symbolCalls = 0;
+    let dismissedCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)/.test(expr) && !expr.includes('setSymbol')) {
+          symbolCalls++;
+          if (symbolCalls === 1) return 'CME_MINI:ESM2026';  // before retry: stuck
+          return 'NASDAQ:AAPL';                              // after retry: changed
+        }
+        return undefined;
+      },
+      evaluateAsync: async () => undefined,
+    });
+    const r = await chart.setSymbol({
+      symbol: 'NASDAQ:AAPL',
+      _deps: {
+        waitForChartReady: async () => true,
+        waitForStudiesReady: async () => true,
+        dismissBlockingDialogs: async () => { dismissedCalls++; return [{ note: 'leave_replay', button: 'Leave' }]; },
+      },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.symbol, 'NASDAQ:AAPL');
+    assert.deepEqual(r.dismissed_dialogs, [{ note: 'leave_replay', button: 'Leave' }]);
+    assert.equal(dismissedCalls, 1);
+  });
+});
+
 describe('core/chart.js — smoke', () => {
   afterEach(() => resetCdpMocks());
   after(cleanupConnection);
@@ -21,8 +117,17 @@ describe('core/chart.js — smoke', () => {
 
   it('test_setSymbol_smoke', async () => {
     const deps = {
+      evaluate: async (expr) => {
+        // setSymbol's verification reads .symbol() — echo back so the check passes
+        if (typeof expr === 'string' && /\.symbol\(\)/.test(expr) && !expr.includes('setSymbol')) {
+          return 'NVDA';
+        }
+        return undefined;
+      },
       evaluateAsync: async () => undefined,
       waitForChartReady: async () => true,
+      waitForStudiesReady: async () => true,
+      dismissBlockingDialogs: async () => [],
     };
     const r = await chart.setSymbol({ symbol: 'NVDA', _deps: deps });
     assert.equal(r.success, true);
