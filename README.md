@@ -163,20 +163,20 @@ tv stream quote | jq '.close'      # monitor price changes
 ### All Commands
 
 ```
-tv status / launch / state / symbol / timeframe / type / info / search
+tv status / launch / ensure / reconnect / state / symbol / timeframe / type / info / search
 tv quote / ohlcv / values
-tv data lines/labels/tables/boxes/strategy/trades/equity/depth/indicator
-tv pine get/set/compile/analyze/check/save/new/open/list/errors/console
-tv draw shape/list/get/remove/clear
+tv data lines/labels/tables/boxes/shapes/strategy/trades/equity/depth/indicator
+tv pine get/set/compile/analyze/check/save/save-as/rename/new/open/list/switch/delete/errors/console/version-history
+tv draw shape/position/list/get/remove/clear
 tv alert list/create/delete
-tv watchlist get/add
-tv indicator add/remove/toggle/set/get
+tv watchlist get/add/add-bulk/remove
+tv indicator set/toggle
 tv layout list/switch
-tv pane list/layout/focus/symbol
-tv tab list/new/close/switch
-tv replay start/step/stop/status/autoplay/trade
+tv pane list/layout/focus/symbol/timeframe/read-batch
+tv tab list/new/close/switch/switch-by-name
+tv replay start/step/stop/status/autoplay/trade/set-resolution
 tv stream quote/bars/values/lines/labels/tables/all
-tv ui click/keyboard/hover/scroll/find/eval/type/panel/fullscreen/mouse
+tv ui click/keyboard/hover/scroll/find/type/panel/fullscreen/mouse
 tv screenshot / discover / ui-state / range / scroll
 ```
 
@@ -215,7 +215,7 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | "Draw a level at 24500" | `draw_shape` (horizontal_line) |
 | "Take a screenshot" | `capture_screenshot` |
 
-## Tool Reference (78 MCP tools)
+## Tool Reference (93 MCP tools)
 
 ### Chart Reading
 
@@ -225,10 +225,11 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | `data_get_study_values` | Read current RSI, MACD, BB, EMA values from all indicators | ~500B |
 | `quote_get` | Get latest price, OHLC, volume | ~200B |
 | `data_get_ohlcv` | Get price bars. **Use `summary: true`** for compact stats | 500B (summary) / 8KB (100 bars) |
+| `depth_get` | DOM / order book bid/ask levels (panel must be open) | ~1KB |
 
 ### Custom Indicator Data (Pine Drawings)
 
-Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any visible Pine indicator.
+Read `line.new()`, `label.new()`, `table.new()`, `box.new()`, `plotshape()` output from any visible Pine indicator.
 
 | Tool | When to use | Output size |
 |------|------------|-------------|
@@ -236,8 +237,20 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `data_get_pine_labels` | Read text annotations + prices ("PDH 24550", "Bias Long") | ~2-5KB |
 | `data_get_pine_tables` | Read data tables (session stats, analytics dashboards) | ~1-4KB |
 | `data_get_pine_boxes` | Read price zones / ranges as {high, low} pairs | ~1-2KB |
+| `data_get_pine_shapes` | Read `plotshape()` / `plotchar()` markers with bar OHLC + timestamp | ~2-4KB |
+| `pane_read_batch` | Single call: read pine_lines/labels/tables/boxes/study_values/ohlcv/drawings across all panes | ~4-10KB |
 
 **Always use `study_filter`** to target a specific indicator: `study_filter: "Profiler"`.
+
+### Strategy Data
+
+Read backtest results from a Pine Script strategy on the chart. The Strategy Tester panel must be open (use `ui_open_panel`).
+
+| Tool | What it reads |
+|------|---------------|
+| `data_get_strategy_results` | Strategy performance metrics (net profit, win rate, drawdown, etc.) |
+| `data_get_trades` | Individual trade list with entry/exit, P&L per trade |
+| `data_get_equity` | Equity curve data points |
 
 ### Chart Control
 
@@ -249,8 +262,10 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `chart_manage_indicator` | Add/remove indicators. **Use full names**: "Relative Strength Index" not "RSI" |
 | `chart_scroll_to_date` | Jump to a date (ISO: "2025-01-15") |
 | `chart_set_visible_range` | Zoom to exact range (unix timestamps) |
+| `chart_get_visible_range` | Read the current visible date range and bars range |
 | `symbol_info` / `symbol_search` | Symbol metadata and search |
 | `indicator_set_inputs` / `indicator_toggle_visibility` | Change indicator settings, show/hide |
+| `data_get_indicator` | Read inputs + visibility for a specific indicator by entity_id |
 
 ### Multi-Pane Layouts
 
@@ -260,24 +275,33 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `pane_set_layout` | Change grid: `s`, `2h`, `2v`, `2x2`, `4`, `6`, `8` |
 | `pane_focus` | Focus a specific pane by index |
 | `pane_set_symbol` | Set symbol on any pane |
+| `pane_set_timeframe` | Set timeframe on a specific pane without focusing it |
+| `pane_read_batch` | Read multiple data types across all panes in one call (see Custom Indicator Data) |
 
 ### Tab Management
 
 | Tool | What it does |
 |------|-------------|
-| `tab_list` | List open chart tabs |
+| `tab_list` | List open chart tabs (includes active Pine script name per tab) |
 | `tab_new` / `tab_close` | Open/close tabs |
 | `tab_switch` | Switch to a tab by index |
+| `tab_switch_by_name` | Switch by Pine script name (exact match → substring fallback) |
 
 ### Pine Script Development
 
 | Tool | Step |
 |------|------|
 | `pine_set_source` | 1. Inject code into editor |
-| `pine_smart_compile` | 2. Compile with auto-detection + error check |
+| `pine_compile` | 2a. Manually click "Add to chart" / "Update on chart" |
+| `pine_smart_compile` | 2b. Compile with auto-detection + error check (returns `elapsed_ms`) |
 | `pine_get_errors` | 3. Read compilation errors if any |
 | `pine_get_console` | 4. Read log.info() output |
 | `pine_save` | 5. Save to TradingView cloud |
+| `pine_save_as` | Save current source as a new script under a different name |
+| `pine_rename` | Rename the currently open script |
+| `pine_delete` | Delete a saved script by name |
+| `pine_switch_script` | Switch the editor to a different saved script |
+| `pine_version_history` | Open TV's "Version history" dialog for the current script |
 | `pine_get_source` | Read current script (**warning: can be 200KB+ for complex scripts**) |
 | `pine_new` | Create blank indicator/strategy/library |
 | `pine_open` / `pine_list_scripts` | Open or list saved scripts |
@@ -293,21 +317,70 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `replay_autoplay` | Auto-advance (set speed in ms) |
 | `replay_trade` | Buy/sell/close positions |
 | `replay_status` | Check position, P&L, date |
+| `replay_set_resolution` | Change replay resolution while paused |
 | `replay_stop` | Return to realtime |
 
-### Drawing, Alerts, UI Automation
+### Drawing
 
 | Tool | What it does |
 |------|-------------|
 | `draw_shape` | Draw horizontal_line, trend_line, rectangle, text |
-| `draw_list` / `draw_remove_one` / `draw_clear` | Manage drawings |
-| `alert_create` / `alert_list` / `alert_delete` | Manage price alerts |
-| `capture_screenshot` | Screenshot (regions: full, chart, strategy_tester) |
-| `batch_run` | Run action across multiple symbols/timeframes |
-| `watchlist_get` / `watchlist_add` | Read/modify watchlist |
+| `draw_position` | Draw an entry + stop-loss + take-profit risk box |
+| `draw_list` | List all drawings on the chart |
+| `draw_get_properties` | Read points, visibility, lock state for a specific drawing |
+| `draw_remove_one` | Remove a drawing by entity_id |
+| `draw_clear` | Remove all drawings |
+
+### Alerts
+
+| Tool | What it does |
+|------|-------------|
+| `alert_create` | Create a price alert via TV's create-alert dialog |
+| `alert_list` | List active alerts (uses the pricealerts REST API) |
+| `alert_delete` | Delete one or all alerts |
+
+### Watchlist
+
+| Tool | What it does |
+|------|-------------|
+| `watchlist_get` | Read current watchlist with last/change/change% |
+| `watchlist_add` | Add a single symbol |
+| `watchlist_add_bulk` | Add multiple symbols in one dialog session |
+| `watchlist_remove` | Remove one or more symbols |
+
+### UI Automation
+
+| Tool | What it does |
+|------|-------------|
+| `ui_open_panel` | Open/close/toggle panels (pine-editor, strategy-tester, watchlist, alerts, trading) |
+| `ui_click` | Click a UI element by aria-label, data-name, text, or class substring |
+| `ui_keyboard` | Press keyboard keys or shortcuts (Enter, Escape, Alt+S, Ctrl+Z) |
+| `ui_type_text` | Type text into the focused input |
+| `ui_hover` | Hover over an element |
+| `ui_scroll` | Scroll the chart up/down/left/right |
+| `ui_mouse_click` | Click at specific x,y coordinates |
+| `ui_find_element` | Find UI elements and return positions |
+| `ui_fullscreen` | Toggle fullscreen |
+| `ui_dismiss_dialogs` | Detect and dismiss blocking modals (Leave-replay, unsaved-changes, Save-script) |
 | `layout_list` / `layout_switch` | Manage saved layouts |
-| `ui_open_panel` / `ui_click` / `ui_evaluate` | UI automation |
-| `tv_launch` / `tv_health_check` / `tv_discover` | Connection management |
+| `capture_screenshot` | Screenshot (regions: full, chart, strategy_tester) |
+
+### Connection Management
+
+| Tool | What it does |
+|------|-------------|
+| `tv_launch` | Launch TradingView Desktop with CDP enabled (auto-detects binary on Mac/Windows/Linux/WSL/MSIX) |
+| `tv_ensure` | Idempotent: no-op if CDP is up; relaunches if needed. Call before any tool when unsure |
+| `tv_health_check` | Verify CDP connection and report current chart state |
+| `tv_ui_state` | Snapshot of which panels/buttons are open and visible |
+| `tv_discover` | Report which TV API paths are available |
+| `tv_reconnect` | Reload the TV page to reclaim a stale Desktop session |
+
+### Batch Operations
+
+| Tool | What it does |
+|------|-------------|
+| `batch_run` | Run an action (`screenshot` / `get_ohlcv` / `get_strategy_results`) across multiple symbols × timeframes |
 
 ## Context Management
 

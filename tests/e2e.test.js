@@ -1,22 +1,28 @@
 /**
- * Comprehensive E2E tests for all 70 TradingView MCP tools.
- * Requires TradingView Desktop running with --remote-debugging-port=9222
+ * Comprehensive E2E tests for the TradingView MCP tools (93 tools as of
+ * 2026-04-25). Each describe-block covers a tool family and exercises the
+ * representative paths via wrapper functions; complete-coverage smoke tests
+ * for individual exports live under tests/smoke/*.smoke.test.js.
  *
+ * Requires TradingView Desktop running with --remote-debugging-port=9222
  * Run: node --test tests/e2e.test.js
  *
- * Coverage: 70+ tests across 12 tool modules
- * - Health & Connection (4 tools)
- * - Chart Control (8 tools)
- * - Data Access (12 tools)
- * - Pine Script (12 tools)
- * - Drawing (5 tools)
- * - UI Automation (12 tools)
- * - Replay Mode (6 tools)
+ * Coverage families (counts approximate — see src/tools/*.js for the
+ * authoritative tool list):
+ * - Health & Connection (6 tools)
+ * - Chart Control (10 tools)
+ * - Data Access (13 tools)
+ * - Pine Script (17 tools)
+ * - Drawing (6 tools)
+ * - UI Automation (10 tools)
+ * - Replay Mode (7 tools)
+ * - Pane / Layout (6 tools)
+ * - Tab Management (5 tools)
  * - Alerts (3 tools)
- * - Watchlist (2 tools)
+ * - Watchlist (4 tools)
  * - Indicators (2 tools)
- * - Batch (1 tool)
- * - Capture (1 tool)
+ * - Batch / Capture (2 tools)
+ * - Layout (2 tools)
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -117,7 +123,7 @@ async function dismissDialogs() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('TradingView MCP — Full E2E (70 tools)', () => {
+describe('TradingView MCP — Full E2E (93 tools)', () => {
 
   before(async () => {
     try {
