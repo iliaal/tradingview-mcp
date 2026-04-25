@@ -1,13 +1,14 @@
 /**
  * Smoke tests — src/core/alerts.js.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import * as alerts from '../../src/core/alerts.js';
 
 describe('core/alerts.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_create_smoke', async () => {
     // alerts.create was rewritten in A.6 (ttnsx888 23524283). New flow:

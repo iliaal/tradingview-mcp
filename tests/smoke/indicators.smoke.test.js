@@ -1,13 +1,14 @@
 /**
  * Smoke tests — src/core/indicators.js.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import * as indicators from '../../src/core/indicators.js';
 
 describe('core/indicators.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_setInputs_smoke', async () => {
     installCdpMocks({

@@ -1,13 +1,14 @@
 /**
  * Smoke tests — src/wait.js::waitForChartReady.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import { waitForChartReady } from '../../src/wait.js';
 
 describe('wait.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_waitForChartReady_smoke_ready', async () => {
     // Stable state (not loading, bar count > 0, unchanged across polls) → true

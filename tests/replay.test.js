@@ -5,7 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { start, step, autoplay, stop, trade, status, VALID_AUTOPLAY_DELAYS } from '../src/core/replay.js';
+import { start, step, autoplay, stop, trade, status, setResolution, VALID_AUTOPLAY_DELAYS } from '../src/core/replay.js';
 
 // ── Mock helpers ─────────────────────────────────────────────────────────
 
@@ -350,5 +350,95 @@ describe('status()', () => {
     assert.equal(result.current_date, 1700000000);
     assert.equal(result.position, 2);
     assert.equal(result.realized_pnl, 123.45);
+  });
+});
+
+// ── setResolution() (B.19) ───────────────────────────────────────────────
+
+describe('setResolution()', () => {
+  it('throws when replay is not started', async () => {
+    let callIdx = 0;
+    const evaluate = async () => { callIdx++; return false; };  // isReplayStarted -> false
+    await assert.rejects(
+      setResolution({ interval: '1', _deps: {
+        evaluate,
+        getReplayApi: mockGetReplayApi(),
+        getReplayUIController: async () => 'window.tv._replayUIController',
+      }}),
+      /Replay is not started/,
+    );
+  });
+
+  it('rejects invalid resolution before calling changeReplayResolution', async () => {
+    const calls = [];
+    const evaluate = async (expr) => {
+      calls.push(expr);
+      // Call 1: isReplayStarted -> true
+      if (calls.length === 1) return true;
+      // Call 2: _allReplayResolutions.value() -> ['1', '5', '15']
+      if (calls.length === 2) return ['1', '5', '15'];
+      return undefined;
+    };
+    await assert.rejects(
+      setResolution({ interval: '99', _deps: {
+        evaluate,
+        getReplayApi: mockGetReplayApi(),
+        getReplayUIController: async () => 'window.tv._replayUIController',
+      }}),
+      /Invalid replay resolution/,
+    );
+    // Verify changeReplayResolution was NOT called (would have been call 3)
+    assert.ok(!calls.some(c => typeof c === 'string' && c.includes('changeReplayResolution')));
+  });
+
+  it('accepts a valid resolution and returns label', async () => {
+    let callIdx = 0;
+    const calls = [];
+    const evaluate = async (expr) => {
+      callIdx++;
+      calls.push(expr);
+      if (callIdx === 1) return true;                     // isReplayStarted
+      if (callIdx === 2) return ['1', '5', '15'];         // _allReplayResolutions
+      if (callIdx === 3) return undefined;                // changeReplayResolution
+      if (callIdx === 4) return '5';                      // _currentReplayResolution
+      return null;                                         // _autoReplayResolution
+    };
+    const r = await setResolution({ interval: '5', _deps: {
+      evaluate,
+      getReplayApi: mockGetReplayApi(),
+      getReplayUIController: async () => 'window.tv._replayUIController',
+    }});
+    assert.equal(r.success, true);
+    assert.equal(r.resolution, '5');
+    assert.equal(r.resolution_label, '5 min');
+    // changeReplayResolution should have fired with the safeString of "5"
+    const changeCall = calls.find(c => typeof c === 'string' && c.includes('changeReplayResolution'));
+    assert.ok(changeCall, 'changeReplayResolution was called');
+    assert.ok(changeCall.includes('"5"'), 'safeString-quoted argument');
+  });
+
+  it('treats "auto" as null and resolves auto label', async () => {
+    let callIdx = 0;
+    const calls = [];
+    const evaluate = async (expr) => {
+      callIdx++;
+      calls.push(expr);
+      if (callIdx === 1) return true;                     // isReplayStarted
+      if (callIdx === 2) return ['1', '5', '15'];         // _allReplayResolutions (not consulted for auto)
+      if (callIdx === 3) return undefined;                // changeReplayResolution(null)
+      if (callIdx === 4) return null;                     // _currentReplayResolution = null (auto)
+      return '5';                                         // _autoReplayResolution
+    };
+    const r = await setResolution({ interval: 'auto', _deps: {
+      evaluate,
+      getReplayApi: mockGetReplayApi(),
+      getReplayUIController: async () => 'window.tv._replayUIController',
+    }});
+    assert.equal(r.success, true);
+    assert.equal(r.resolution, null);
+    assert.match(r.resolution_label, /^auto/);
+    // Should pass `null` not safeString-quoted
+    const changeCall = calls.find(c => typeof c === 'string' && c.includes('changeReplayResolution'));
+    assert.ok(changeCall.includes('changeReplayResolution(null)'));
   });
 });

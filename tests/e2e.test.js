@@ -28,6 +28,10 @@ import CDP from 'chrome-remote-interface';
 // validating TV's underlying API directly.
 import * as coreUi from '../src/core/ui.js';
 import * as coreReplay from '../src/core/replay.js';
+import * as coreHealth from '../src/core/health.js';
+import * as coreData from '../src/core/data.js';
+import * as corePane from '../src/core/pane.js';
+import { dismissBlockingDialogs } from '../src/core/dialog.js';
 import { disconnect as disconnectCoreClient } from '../src/connection.js';
 
 let client;
@@ -260,6 +264,17 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       assert.ok(r.cdp_port, 'cdp_port reported');
       assert.ok(r.cdp_url, 'cdp_url reported');
       assert.ok(['darwin', 'win32', 'linux', 'wsl'].includes(r.platform), `platform=${r.platform}`);
+    });
+
+    it('tv_ensure — idempotent with CDP already up (B.11)', async () => {
+      // CDP is responding (the suite is already connected), so ensureCDP
+      // should short-circuit with action:'none' and not spawn anything.
+      const r = await coreHealth.ensureCDP({});
+      assert.equal(r.success, true);
+      assert.equal(r.action, 'none', 'ensureCDP with CDP up should be a no-op');
+      assert.ok(r.cdp_port);
+      assert.ok(r.browser, 'browser version reported');
+      assert.equal(r.api_available, true);
     });
   });
 
@@ -777,6 +792,30 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
       await evaluate(`try { ${BOTTOM_BAR}.hideWidget('backtesting'); } catch(e) {}`);
     });
+
+    it('data_get_pine_shapes — read plotshape markers (B.12)', async () => {
+      // Read-only: walks every study's metaInfo + bar data, returns
+      // shape signals with OHLC. Will return zero studies on a chart
+      // without plotshape-using indicators — that's still a successful run.
+      const r = await coreData.getPineShapes({ last_n_bars: 50 });
+      assert.equal(r.success, true);
+      assert.ok(typeof r.study_count === 'number', 'study_count is a number');
+      assert.ok(Array.isArray(r.studies), 'studies is an array');
+      // Cap test: ask for 9999 bars, internal cap is 500
+      const r2 = await coreData.getPineShapes({ last_n_bars: 9999 });
+      assert.equal(r2.success, true);
+    });
+
+    it('data_get_study_values — accepts study_filter (B.20)', async () => {
+      // Without filter: returns whatever studies are loaded.
+      const all = await coreData.getStudyValues();
+      assert.equal(all.success, true);
+      assert.ok(typeof all.study_count === 'number');
+      // With unmatchable filter: should return 0 studies (or just the ones whose name contains the unique string).
+      const filtered = await coreData.getStudyValues({ study_filter: '__no_such_study__' });
+      assert.equal(filtered.success, true);
+      assert.equal(filtered.study_count, 0, 'unmatchable filter returns 0 studies');
+    });
   });
 
   // ─── 4. PINE SCRIPT (12 tools) ────────────────────────────────────────
@@ -1245,6 +1284,35 @@ val = array.get(a, 5)`;
       `);
       assert.ok(Array.isArray(results), 'Element search works');
       assert.ok(results.length > 0, 'Found visible buttons');
+    });
+
+    it('ui_dismiss_dialogs — no-op when nothing is open (G)', async () => {
+      // Idempotent: returns [] when no recognized dialog is showing.
+      const r = await dismissBlockingDialogs();
+      assert.ok(Array.isArray(r), 'returns an array');
+      // Don't assert empty — TV could legitimately have a "Continue your last replay"
+      // dialog from a prior session, in which case dismissBlockingDialogs would click
+      // its X and report it. Either zero items or items with valid notes is acceptable.
+      for (const item of r) {
+        assert.ok(typeof item === 'object' && item.note, 'each item has a note');
+        assert.ok(['leave_replay', 'continue_replay', 'unsaved_changes'].includes(item.note), `unexpected note: ${item.note}`);
+      }
+    });
+
+    it('pane_set_timeframe — change pane TF without focusing (B.18)', async () => {
+      // Read current pane 0 TF, set to a new one, set it back.
+      // Works against single-pane layouts (index 0 always exists).
+      const before = await evaluate(`${CHART_API}._chartWidget.model().mainSeries().properties().resolution.value()`).catch(() => null);
+      // Pick a TF different from current (default 'D' if can't read)
+      const targetTf = before === '60' ? 'D' : '60';
+      const r = await corePane.setTimeframe({ index: 0, timeframe: targetTf });
+      assert.equal(r.success, true);
+      assert.equal(r.timeframe, targetTf);
+      assert.ok(r.symbol, 'symbol reported');
+      // Restore prior TF if we knew it
+      if (before) {
+        await corePane.setTimeframe({ index: 0, timeframe: before }).catch(() => {});
+      }
     });
 
     it('layout_list — find layout dropdown button', async () => {

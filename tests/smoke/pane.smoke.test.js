@@ -1,9 +1,9 @@
 /**
  * Smoke tests — src/core/pane.js.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import * as pane from '../../src/core/pane.js';
 
 const FAKE_LAYOUT = {
@@ -18,6 +18,7 @@ const FAKE_LAYOUT = {
 
 describe('core/pane.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_list_smoke', async () => {
     installCdpMocks({ evaluate: async () => FAKE_LAYOUT });
@@ -71,5 +72,37 @@ describe('core/pane.js — smoke', () => {
     assert.equal(r.success, true);
     assert.equal(r.symbol, 'NVDA');
     assert.equal(r.index, 0);
+  });
+
+  // ── B.18 setTimeframe ─────────────────────────────────────────────
+  it('test_setTimeframe_smoke', async () => {
+    installCdpMocks({
+      evaluate: async () => ({ index: 1, timeframe: '60', symbol: 'AAPL' }),
+    });
+    const r = await pane.setTimeframe({ index: 1, timeframe: '60' });
+    assert.equal(r.success, true);
+    assert.equal(r.index, 1);
+    assert.equal(r.timeframe, '60');
+    assert.equal(r.symbol, 'AAPL');
+  });
+
+  it('test_setTimeframe_smoke_throws_on_out_of_range_index', async () => {
+    installCdpMocks({
+      evaluate: async () => ({ error: 'Pane index 5 out of range (have 2 panes)' }),
+    });
+    await assert.rejects(
+      pane.setTimeframe({ index: 5, timeframe: '60' }),
+      /out of range/,
+    );
+  });
+
+  it('test_setTimeframe_smoke_throws_on_setResolution_failure', async () => {
+    installCdpMocks({
+      evaluate: async () => ({ error: 'setResolution failed: bad timeframe' }),
+    });
+    await assert.rejects(
+      pane.setTimeframe({ index: 0, timeframe: 'bogus' }),
+      /setResolution failed/,
+    );
   });
 });

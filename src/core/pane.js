@@ -149,9 +149,13 @@ export async function setTimeframe({ index, timeframe }) {
       if (${idx} >= all.length) return { error: 'Pane index ' + ${idx} + ' out of range (have ' + all.length + ' panes)' };
       var chart = all[${idx}];
       try {
-        var mainSeries = chart.model().mainSeries();
-        mainSeries.setResolution(${safeString(timeframe)});
-        return { index: ${idx}, timeframe: ${safeString(timeframe)}, symbol: mainSeries.symbol() };
+        // TV 3.1.0 exposes setResolution on the chart widget itself, not on
+        // its mainSeries. ttnsx888's original used mainSeries.setResolution
+        // which throws "setResolution is not a function" on current builds.
+        chart.setResolution(${safeString(timeframe)});
+        var sym = '';
+        try { sym = chart.model().mainSeries().symbol(); } catch(e) {}
+        return { index: ${idx}, timeframe: ${safeString(timeframe)}, symbol: sym };
       } catch(e) {
         return { error: 'setResolution failed: ' + e.message };
       }

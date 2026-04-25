@@ -4,12 +4,14 @@
  * and hit http://localhost:9222/json/*, which needs more than a 10-line
  * mock. They belong in a real integration test, not a smoke test.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { cleanupConnection } from '../helpers/mock-cdp.js';
 import * as tab from '../../src/core/tab.js';
 
 describe('core/tab.js — smoke', () => {
   const realFetch = globalThis.fetch;
+  after(cleanupConnection);
   afterEach(() => { globalThis.fetch = realFetch; });
 
   it('test_list_smoke', async () => {
