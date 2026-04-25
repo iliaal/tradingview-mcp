@@ -3,7 +3,15 @@
  * All functions accept plain options objects and return plain JS objects.
  * They throw on error (callers catch and format).
  */
-import { evaluate, evaluateAsync, getClient } from '../connection.js';
+import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, getClient as _getClient } from '../connection.js';
+
+function _resolve(deps) {
+  return {
+    evaluate: deps?.evaluate || _evaluate,
+    evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
+    getClient: deps?.getClient || _getClient,
+  };
+}
 
 // ── Monaco finder (injected into TV page) ──
 //
@@ -96,7 +104,8 @@ const OPEN_PINE_PANEL = `
  * from transitional states where the panel auto-closes or Monaco hasn't yet
  * settled.
  */
-export async function ensurePineEditorOpen() {
+export async function ensurePineEditorOpen({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const already = await evaluate(`
     (function() {
       var m = ${FIND_MONACO};
@@ -230,7 +239,8 @@ export function analyze({ source }) {
   };
 }
 
-export async function check({ source }) {
+export async function check({ source, _deps }) {
+  const { evaluate, evaluateAsync } = _resolve(_deps);
   const formData = new URLSearchParams();
   formData.append('source', source);
 
@@ -291,8 +301,9 @@ export async function check({ source }) {
 
 // ── Functions requiring TradingView connection ──
 
-export async function getSource() {
-  const editorReady = await ensurePineEditorOpen();
+export async function getSource({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor or Monaco not found in React fiber tree.');
 
   const source = await evaluate(`
@@ -310,8 +321,9 @@ export async function getSource() {
   return { success: true, source, line_count: source.split('\n').length, char_count: source.length };
 }
 
-export async function setSource({ source }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function setSource({ source, _deps }) {
+  const { evaluate } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const escaped = JSON.stringify(source);
@@ -366,8 +378,9 @@ export async function setSource({ source }) {
   throw new Error('Pine Editor setValue() timed out after 15s. The script may be too large or the editor is unresponsive.');
 }
 
-export async function compile() {
-  const editorReady = await ensurePineEditorOpen();
+export async function compile({ _deps } = {}) {
+  const { evaluate, getClient } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const clicked = await evaluate(`
@@ -409,8 +422,9 @@ export async function compile() {
   return { success: true, button_clicked: clicked || 'keyboard_shortcut', source: 'dom_fallback' };
 }
 
-export async function getErrors() {
-  const editorReady = await ensurePineEditorOpen();
+export async function getErrors({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const errors = await evaluate(`
@@ -434,8 +448,9 @@ export async function getErrors() {
   };
 }
 
-export async function save() {
-  const editorReady = await ensurePineEditorOpen();
+export async function save({ _deps } = {}) {
+  const { evaluate, getClient } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const c = await getClient();
@@ -466,8 +481,9 @@ export async function save() {
   return { success: true, action: dialogHandled ? 'saved_with_dialog' : 'Ctrl+S_dispatched' };
 }
 
-export async function getConsole() {
-  const editorReady = await ensurePineEditorOpen();
+export async function getConsole({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const entries = await evaluate(`
@@ -516,9 +532,10 @@ export async function getConsole() {
   return { success: true, entries: entries || [], entry_count: entries?.length || 0 };
 }
 
-export async function smartCompile() {
+export async function smartCompile({ _deps } = {}) {
+  const { evaluate, getClient } = _resolve(_deps);
   const startedAt = Date.now();
-  const editorReady = await ensurePineEditorOpen();
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const studiesBefore = await evaluate(`
@@ -600,8 +617,9 @@ export async function smartCompile() {
   };
 }
 
-export async function newScript({ type }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function newScript({ type, _deps }) {
+  const { evaluate } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const typeMap = { indicator: 'indicator', strategy: 'strategy', library: 'library' };
@@ -629,8 +647,9 @@ export async function newScript({ type }) {
   return { success: true, type, action: 'new_script_created', template: typeMap[type] };
 }
 
-export async function openScript({ name }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function openScript({ name, _deps }) {
+  const { evaluate, evaluateAsync } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const escapedName = JSON.stringify(name.toLowerCase());
@@ -683,7 +702,8 @@ export async function openScript({ name }) {
   return { success: true, name: result.name, script_id: result.id, lines: result.lines, source: 'internal_api', opened: true };
 }
 
-export async function listScripts() {
+export async function listScripts({ _deps } = {}) {
+  const { evaluateAsync } = _resolve(_deps);
   const scripts = await evaluateAsync(`
     fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
       .then(function(r) { return r.json(); })
@@ -720,8 +740,9 @@ export async function listScripts() {
  * textContent in the dropdown → dispatch a real mousePressed/mouseReleased
  * pair at its coordinates → verify the nameButton now shows the new name.
  */
-export async function switchScript({ name }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function switchScript({ name, _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const currentBefore = await evaluate(`
@@ -794,7 +815,8 @@ export async function switchScript({ name }) {
 // Used by version_history and other menu-driven flows. Real MouseEvents
 // (mousedown+mouseup+click) are required — TV's React tree ignores .click()
 // on these dropdown items in current builds.
-async function _pineMenuAction(label, subLabel) {
+async function _pineMenuAction(label, subLabel, _deps) {
+  const { evaluateAsync } = _resolve(_deps);
   const result = await evaluateAsync(`
     (function() {
       function mc(el) {
@@ -863,7 +885,8 @@ async function _pineMenuAction(label, subLabel) {
 // Resolve the currently open script's pine-facade {id, name, version}.
 // Reads the editor title button's text, then matches it against the saved
 // scripts list (with fuzzy fallback for truncated names).
-async function _currentScriptInfo() {
+async function _currentScriptInfo(_deps) {
+  const { evaluateAsync } = _resolve(_deps);
   const result = await evaluateAsync(`
     (function() {
       var titleBtn = document.querySelector('[data-qa-id="pine-script-title-button"]');
@@ -901,8 +924,9 @@ async function _currentScriptInfo() {
  * Without the reopen, subsequent pine_save would write back to the
  * previous script — not the saved-as copy.
  */
-export async function saveAs({ name }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function saveAs({ name, _deps }) {
+  const { evaluate, evaluateAsync } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const source = await evaluate(`
@@ -952,11 +976,12 @@ export async function saveAs({ name }) {
 /**
  * Rename the currently open Pine script via pine-facade REST API.
  */
-export async function renameScript({ name }) {
-  const editorReady = await ensurePineEditorOpen();
+export async function renameScript({ name, _deps }) {
+  const { evaluateAsync } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
-  const { id, name: oldName } = await _currentScriptInfo();
+  const { id, name: oldName } = await _currentScriptInfo(_deps);
   const encoded = encodeURIComponent(id);
 
   const result = await evaluateAsync(`
@@ -979,11 +1004,12 @@ export async function renameScript({ name }) {
  * No way to navigate the history tree programmatically — this just opens
  * the dialog so the user can pick a revision.
  */
-export async function versionHistory() {
-  const editorReady = await ensurePineEditorOpen();
+export async function versionHistory({ _deps } = {}) {
+  const { evaluateAsync } = _resolve(_deps);
+  const editorReady = await ensurePineEditorOpen({ _deps });
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
-  await _pineMenuAction('Version history…');
+  await _pineMenuAction('Version history…', null, _deps);
   await new Promise(r => setTimeout(r, 500));
 
   return { success: true, action: 'version_history_opened' };
@@ -993,7 +1019,8 @@ export async function versionHistory() {
  * Delete a saved Pine script by name via pine-facade REST API.
  * The Recently Used dropdown still shows the name until next TV reload.
  */
-export async function deleteScript({ name }) {
+export async function deleteScript({ name, _deps }) {
+  const { evaluateAsync } = _resolve(_deps);
   const list = await evaluateAsync(`
     fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
       .then(function(r) { return r.json(); })

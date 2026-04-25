@@ -8,11 +8,19 @@
  *   - Create/Cancel buttons: matched by textContent in the dialog footer
  *   - Message: a <button data-qa-id="alert-message-button"> opens a sub-dialog
  */
-import { evaluate, evaluateAsync, getClient, safeString } from '../connection.js';
+import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, getClient as _getClient, safeString } from '../connection.js';
 
 const DIALOG_RE = '/Create alert on/i';
 
-async function openDialog() {
+function _resolve(deps) {
+  return {
+    evaluate: deps?.evaluate || _evaluate,
+    evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
+    getClient: deps?.getClient || _getClient,
+  };
+}
+
+async function openDialog({ evaluate, getClient }) {
   // Try keyboard shortcut Alt+A first — most reliable across TV UI revisions.
   const client = await getClient();
   await client.Input.dispatchKeyEvent({
@@ -41,8 +49,9 @@ async function openDialog() {
   return false;
 }
 
-export async function create({ condition, price, message }) {
-  const opened = await openDialog();
+export async function create({ condition, price, message, _deps }) {
+  const { evaluate, getClient } = _resolve(_deps);
+  const opened = await openDialog({ evaluate, getClient });
   if (!opened) {
     return { success: false, price, condition, message: message || '(none)', price_set: false, error: 'dialog_not_opened' };
   }
@@ -185,7 +194,8 @@ export async function create({ condition, price, message }) {
   };
 }
 
-export async function list() {
+export async function list({ _deps } = {}) {
+  const { evaluateAsync } = _resolve(_deps);
   // Use pricealerts REST API — returns structured data with alert_id, symbol, price, conditions
   const result = await evaluateAsync(`
     fetch('https://pricealerts.tradingview.com/list_alerts', { credentials: 'include' })
@@ -216,7 +226,8 @@ export async function list() {
   return { success: true, alert_count: result?.alerts?.length || 0, source: 'internal_api', alerts: result?.alerts || [], error: result?.error };
 }
 
-export async function deleteAlerts({ delete_all }) {
+export async function deleteAlerts({ delete_all, _deps }) {
+  const { evaluate } = _resolve(_deps);
   if (delete_all) {
     const result = await evaluate(`
       (function() {
