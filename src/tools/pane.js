@@ -29,4 +29,12 @@ export function registerPaneTools(server) {
     try { return jsonResult(await core.setSymbol({ index, symbol })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
+
+  server.tool('pane_set_timeframe', 'Set the timeframe on a specific pane by index without focusing it. Useful when prepping a multi-pane grid without disturbing the active pane.', {
+    index: z.coerce.number().describe('Pane index (0-based)'),
+    timeframe: z.string().describe('Timeframe (e.g., "1", "5", "15", "60", "D", "W", "M")'),
+  }, async ({ index, timeframe }) => {
+    try { return jsonResult(await core.setTimeframe({ index, timeframe })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
 }
