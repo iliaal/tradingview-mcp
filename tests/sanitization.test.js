@@ -317,13 +317,23 @@ describe('source audit — no unsafe interpolation patterns', () => {
 // ── Path traversal prevention ────────────────────────────────────────────
 
 describe('path traversal prevention', () => {
+  // Either escape form is accepted — the slash inside a character class
+  // doesn't need escaping per the ECMA spec (ESLint no-useless-escape
+  // flags the leading-backslash form). Both strip / and \ from the
+  // filename so user input can't traverse the screenshot directory.
   it('capture.js strips path separators from filename', () => {
     const source = readFileSync(new URL('../src/core/capture.js', import.meta.url), 'utf8');
-    assert.ok(source.includes(".replace(/[\\/\\\\]/g, '_')"));
+    assert.ok(
+      source.includes(".replace(/[/\\\\]/g, '_')") ||
+      source.includes(".replace(/[\\/\\\\]/g, '_')")
+    );
   });
 
   it('batch.js strips path separators from filename', () => {
     const source = readFileSync(new URL('../src/core/batch.js', import.meta.url), 'utf8');
-    assert.ok(source.includes(".replace(/[\\/\\\\]/g, '_')"));
+    assert.ok(
+      source.includes(".replace(/[/\\\\]/g, '_')") ||
+      source.includes(".replace(/[\\/\\\\]/g, '_')")
+    );
   });
 });
