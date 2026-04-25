@@ -78,6 +78,36 @@ describe('CLI — help and routing', () => {
     assert.ok(stdout.includes('--count'));
     assert.ok(stdout.includes('--summary'));
   });
+
+  it('pane --help shows subcommands', () => {
+    const { stdout, exitCode } = run(['pane', '--help']);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('list'));
+    assert.ok(stdout.includes('layout'));
+    assert.ok(stdout.includes('focus'));
+    assert.ok(stdout.includes('symbol'));
+  });
+
+  it('tab --help shows subcommands', () => {
+    const { stdout, exitCode } = run(['tab', '--help']);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('list'));
+    assert.ok(stdout.includes('new'));
+    assert.ok(stdout.includes('close'));
+    assert.ok(stdout.includes('switch'));
+  });
+
+  it('pane layout missing arg exits 1', () => {
+    const { exitCode, stderr } = run(['pane', 'layout']);
+    assert.equal(exitCode, 1);
+    assert.ok(stderr.includes('Layout required'));
+  });
+
+  it('tab switch missing arg exits 1', () => {
+    const { exitCode, stderr } = run(['tab', 'switch']);
+    assert.equal(exitCode, 1);
+    assert.ok(stderr.includes('Index required'));
+  });
 });
 
 describe('CLI — pine analyze (offline)', () => {
