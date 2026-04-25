@@ -2,7 +2,7 @@
  * Core streaming logic — real-time JSONL output from TradingView.
  * Uses efficient poll + dedup: only emits when data changes.
  */
-import { evaluate } from '../connection.js';
+import { evaluate as _evaluate } from '../connection.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 const MODEL = `${CHART_API}._chartWidget.model()`;
@@ -11,56 +11,72 @@ const MODEL = `${CHART_API}._chartWidget.model()`;
  * Generic poll-and-diff loop.
  * Calls fetcher(), compares to last value, emits JSONL on change.
  * Writes to stdout directly for pipe-friendliness.
+ *
+ * @param {Function} fetcher - returns the data object (or null) on each tick
+ * @param {object} [opts]
+ * @param {number} [opts.interval=500] - ms between polls
+ * @param {boolean} [opts.dedupe=true] - skip emit when JSON-stringified data matches the previous tick
+ * @param {string} [opts.label='stream'] - tag attached to JSONL `_stream` field and stderr lines
+ * @param {object} [opts._deps] - test injection (writeStdout, writeStderr, sleep, maxIterations, registerSignal, removeSignal)
  */
-async function pollLoop(fetcher, { interval = 500, dedupe = true, label = 'stream' } = {}) {
+async function pollLoop(fetcher, { interval = 500, dedupe = true, label = 'stream', _deps } = {}) {
+  const writeStdout = _deps?.writeStdout || ((s) => process.stdout.write(s));
+  const writeStderr = _deps?.writeStderr || ((s) => process.stderr.write(s));
+  const sleepFn = _deps?.sleep || sleep;
+  const maxIterations = _deps?.maxIterations ?? Infinity;
+  const registerSignal = _deps?.registerSignal || ((sig, h) => process.on(sig, h));
+  const removeSignal = _deps?.removeSignal || ((sig, h) => process.removeListener(sig, h));
+
   let lastHash = null;
   let running = true;
+  let iter = 0;
 
   const cleanup = () => { running = false; };
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
+  registerSignal('SIGINT', cleanup);
+  registerSignal('SIGTERM', cleanup);
 
   // Emit header with compliance notice
   const start = Date.now();
-  process.stderr.write(`\u26A0  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.\n`);
-  process.stderr.write(`   Streams from your locally running TradingView Desktop instance only.\n`);
-  process.stderr.write(`   Does not connect to TradingView servers. Requires --remote-debugging-port=9222.\n`);
-  process.stderr.write(`   Ensure your usage complies with TradingView's Terms of Use.\n`);
-  process.stderr.write(`[stream:${label}] started, interval=${interval}ms, Ctrl+C to stop\n`);
+  writeStderr(`\u26A0  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.\n`);
+  writeStderr(`   Streams from your locally running TradingView Desktop instance only.\n`);
+  writeStderr(`   Does not connect to TradingView servers. Requires --remote-debugging-port=9222.\n`);
+  writeStderr(`   Ensure your usage complies with TradingView's Terms of Use.\n`);
+  writeStderr(`[stream:${label}] started, interval=${interval}ms, Ctrl+C to stop\n`);
 
-  while (running) {
+  while (running && iter < maxIterations) {
+    iter++;
     try {
       const data = await fetcher();
-      if (!data) { await sleep(interval); continue; }
+      if (!data) { await sleepFn(interval); continue; }
 
       const hash = dedupe ? JSON.stringify(data) : null;
       if (!dedupe || hash !== lastHash) {
         lastHash = hash;
         const line = JSON.stringify({ ...data, _ts: Date.now(), _stream: label });
-        process.stdout.write(line + '\n');
+        writeStdout(line + '\n');
       }
     } catch (err) {
       // Connection errors — retry silently
       if (/CDP|ECONNREFUSED/i.test(err.message)) {
-        await sleep(2000);
+        await sleepFn(2000);
         continue;
       }
-      process.stderr.write(`[stream:${label}] error: ${err.message}\n`);
+      writeStderr(`[stream:${label}] error: ${err.message}\n`);
     }
-    await sleep(interval);
+    await sleepFn(interval);
   }
 
-  process.stderr.write(`[stream:${label}] stopped after ${((Date.now() - start) / 1000).toFixed(1)}s\n`);
-  process.removeListener('SIGINT', cleanup);
-  process.removeListener('SIGTERM', cleanup);
+  writeStderr(`[stream:${label}] stopped after ${((Date.now() - start) / 1000).toFixed(1)}s\n`);
+  removeSignal('SIGINT', cleanup);
+  removeSignal('SIGTERM', cleanup);
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ── Stream: quote ──
 
-async function fetchQuote() {
-  return evaluate(`
+async function fetchQuote(evalFn) {
+  return evalFn(`
     (function() {
       var chart = ${CHART_API};
       var m = ${MODEL};
@@ -81,14 +97,15 @@ async function fetchQuote() {
   `);
 }
 
-export async function streamQuote({ interval } = {}) {
-  return pollLoop(fetchQuote, { interval: interval || 300, label: 'quote' });
+export async function streamQuote({ interval, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchQuote(evalFn), { interval: interval || 300, label: 'quote', _deps });
 }
 
 // ── Stream: ohlcv (last N bars, emits on new bar) ──
 
-async function fetchLastBar() {
-  return evaluate(`
+async function fetchLastBar(evalFn) {
+  return evalFn(`
     (function() {
       var chart = ${CHART_API};
       var m = ${MODEL};
@@ -111,14 +128,15 @@ async function fetchLastBar() {
   `);
 }
 
-export async function streamBars({ interval } = {}) {
-  return pollLoop(fetchLastBar, { interval: interval || 500, label: 'bars' });
+export async function streamBars({ interval, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchLastBar(evalFn), { interval: interval || 500, label: 'bars', _deps });
 }
 
 // ── Stream: indicator values ──
 
-async function fetchValues() {
-  return evaluate(`
+async function fetchValues(evalFn) {
+  return evalFn(`
     (function() {
       var chart = ${CHART_API};
       var m = ${MODEL};
@@ -145,15 +163,16 @@ async function fetchValues() {
   `);
 }
 
-export async function streamValues({ interval } = {}) {
-  return pollLoop(fetchValues, { interval: interval || 500, label: 'values' });
+export async function streamValues({ interval, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchValues(evalFn), { interval: interval || 500, label: 'values', _deps });
 }
 
 // ── Stream: pine lines ──
 
-async function fetchLines(studyFilter) {
+async function fetchLines(evalFn, studyFilter) {
   const filter = studyFilter ? JSON.stringify(studyFilter) : 'null';
-  return evaluate(`
+  return evalFn(`
     (function() {
       var filter = ${filter};
       var chart = ${CHART_API};
@@ -191,15 +210,16 @@ async function fetchLines(studyFilter) {
   `);
 }
 
-export async function streamLines({ interval, filter } = {}) {
-  return pollLoop(() => fetchLines(filter), { interval: interval || 1000, label: 'lines' });
+export async function streamLines({ interval, filter, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchLines(evalFn, filter), { interval: interval || 1000, label: 'lines', _deps });
 }
 
 // ── Stream: pine labels ──
 
-async function fetchLabels(studyFilter) {
+async function fetchLabels(evalFn, studyFilter) {
   const filterStr = studyFilter ? JSON.stringify(studyFilter) : 'null';
-  return evaluate(`
+  return evalFn(`
     (function() {
       var filter = ${filterStr};
       var chart = ${CHART_API};
@@ -234,15 +254,16 @@ async function fetchLabels(studyFilter) {
   `);
 }
 
-export async function streamLabels({ interval, filter } = {}) {
-  return pollLoop(() => fetchLabels(filter), { interval: interval || 1000, label: 'labels' });
+export async function streamLabels({ interval, filter, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchLabels(evalFn, filter), { interval: interval || 1000, label: 'labels', _deps });
 }
 
 // ── Stream: pine tables ──
 
-async function fetchTables(studyFilter) {
+async function fetchTables(evalFn, studyFilter) {
   const filterStr = studyFilter ? JSON.stringify(studyFilter) : 'null';
-  return evaluate(`
+  return evalFn(`
     (function() {
       var filter = ${filterStr};
       var chart = ${CHART_API};
@@ -284,16 +305,17 @@ async function fetchTables(studyFilter) {
   `);
 }
 
-export async function streamTables({ interval, filter } = {}) {
-  return pollLoop(() => fetchTables(filter), { interval: interval || 2000, label: 'tables' });
+export async function streamTables({ interval, filter, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchTables(evalFn, filter), { interval: interval || 2000, label: 'tables', _deps });
 }
 
 // ── Stream: all panes (multi-symbol) ──
 
 const CWC = 'window.TradingViewApi._chartWidgetCollection';
 
-async function fetchAllPanes() {
-  return evaluate(`
+async function fetchAllPanes(evalFn) {
+  return evalFn(`
     (function() {
       var cwc = ${CWC};
       var all = cwc.getAll();
@@ -330,6 +352,7 @@ async function fetchAllPanes() {
   `);
 }
 
-export async function streamAllPanes({ interval } = {}) {
-  return pollLoop(fetchAllPanes, { interval: interval || 500, label: 'all-panes' });
+export async function streamAllPanes({ interval, _deps } = {}) {
+  const evalFn = _deps?.evaluate || _evaluate;
+  return pollLoop(() => fetchAllPanes(evalFn), { interval: interval || 500, label: 'all-panes', _deps });
 }
