@@ -64,17 +64,27 @@ const FIND_MONACO = `
 // Pine Editor panel-open trigger. Idempotent — safe to re-invoke during the
 // poll loop in ensurePineEditorOpen when the panel self-closes between calls
 // (observed on TV 3.1 after pine_new or failed setValue).
+//
+// Calls BOTH the API method and the toolbar button click, in that order.
+// On TV Desktop 3.1.0 the bottomWidgetBar API methods (activateScriptEditorTab,
+// showWidget) are silent no-ops — _enabledWidgets is empty and the widget
+// system was reworked to use WatchableValue. The button click is what
+// actually opens the panel on current builds. Older builds still respond to
+// the API calls. Calling both is harmless (idempotent) and covers both eras.
 const OPEN_PINE_PANEL = `
   (function() {
+    var actions = [];
     var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
     if (bwb) {
-      if (typeof bwb.activateScriptEditorTab === 'function') { bwb.activateScriptEditorTab(); return 'activateScriptEditorTab'; }
-      if (typeof bwb.showWidget === 'function') { bwb.showWidget('pine-editor'); return 'showWidget'; }
+      try {
+        if (typeof bwb.activateScriptEditorTab === 'function') { bwb.activateScriptEditorTab(); actions.push('activateScriptEditorTab'); }
+        else if (typeof bwb.showWidget === 'function') { bwb.showWidget('pine-editor'); actions.push('showWidget'); }
+      } catch(e) {}
     }
-    var btn = document.querySelector('[aria-label="Pine"]')
-      || document.querySelector('[data-name="pine-dialog-button"]');
-    if (btn) { btn.click(); return 'button-click'; }
-    return null;
+    var btn = document.querySelector('[data-name="pine-dialog-button"]')
+      || document.querySelector('[aria-label="Pine"]');
+    if (btn) { btn.click(); actions.push('button-click'); }
+    return actions.length ? actions.join('+') : null;
   })()
 `;
 

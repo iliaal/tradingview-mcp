@@ -206,12 +206,36 @@ export async function symbolInfo({ _deps } = {}) {
   const result = await evaluate(`
     (function() {
       var chart = ${CHART_API};
-      var info = chart.symbolExt();
-      return {
-        symbol: info.symbol, full_name: info.full_name, exchange: info.exchange,
-        description: info.description, type: info.type, pro_name: info.pro_name,
-        typespecs: info.typespecs, resolution: chart.resolution(), chart_type: chart.chartType()
-      };
+      // TV Desktop 3.1.0 removed chart.symbolExt(); fall back to symbolInfo()
+      // (returns full info object), then symbol() as a last resort.
+      var info = null;
+      try { if (typeof chart.symbolExt === 'function') info = chart.symbolExt(); } catch(e) {}
+      if (!info) {
+        try { if (typeof chart.symbolInfo === 'function') info = chart.symbolInfo(); } catch(e) {}
+      }
+      var symbol = '';
+      try { symbol = chart.symbol(); } catch(e) {}
+      var resolution = '';
+      try { resolution = chart.resolution(); } catch(e) {}
+      var chart_type = null;
+      try { chart_type = chart.chartType(); } catch(e) {}
+      if (info) {
+        return {
+          symbol: info.symbol || symbol,
+          full_name: info.full_name || info.fullName,
+          exchange: info.exchange,
+          description: info.description,
+          type: info.type,
+          pro_name: info.pro_name || info.proName,
+          typespecs: info.typespecs,
+          resolution: resolution,
+          chart_type: chart_type,
+          source: 'symbolExt_or_symbolInfo'
+        };
+      }
+      // Minimal fallback — only the symbol string is reliably available on
+      // TV 3.1.0 without the symbolExt API.
+      return { symbol: symbol, resolution: resolution, chart_type: chart_type, source: 'symbol_only' };
     })()
   `);
   return { success: true, ...result };
