@@ -2,7 +2,7 @@
  * Core chart control logic.
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, safeString, requireFinite } from '../connection.js';
-import { waitForChartReady as _waitForChartReady } from '../wait.js';
+import { waitForChartReady as _waitForChartReady, waitForStudiesReady as _waitForStudiesReady } from '../wait.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 
@@ -11,6 +11,7 @@ function _resolve(deps) {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
+    waitForStudiesReady: deps?.waitForStudiesReady || _waitForStudiesReady,
   };
 }
 
@@ -38,7 +39,7 @@ export async function getState({ _deps } = {}) {
 }
 
 export async function setSymbol({ symbol, _deps }) {
-  const { evaluateAsync, waitForChartReady } = _resolve(_deps);
+  const { evaluateAsync, waitForChartReady, waitForStudiesReady } = _resolve(_deps);
   await evaluateAsync(`
     (function() {
       var chart = ${CHART_API};
@@ -49,11 +50,12 @@ export async function setSymbol({ symbol, _deps }) {
     })()
   `);
   const ready = await waitForChartReady(symbol);
-  return { success: true, symbol, chart_ready: ready };
+  const studies_ready = await waitForStudiesReady();
+  return { success: true, symbol, chart_ready: ready, studies_ready };
 }
 
 export async function setTimeframe({ timeframe, _deps }) {
-  const { evaluate, waitForChartReady } = _resolve(_deps);
+  const { evaluate, waitForChartReady, waitForStudiesReady } = _resolve(_deps);
   await evaluate(`
     (function() {
       var chart = ${CHART_API};
@@ -61,7 +63,8 @@ export async function setTimeframe({ timeframe, _deps }) {
     })()
   `);
   const ready = await waitForChartReady(null, timeframe);
-  return { success: true, timeframe, chart_ready: ready };
+  const studies_ready = await waitForStudiesReady();
+  return { success: true, timeframe, chart_ready: ready, studies_ready };
 }
 
 export async function setType({ chart_type, _deps }) {
