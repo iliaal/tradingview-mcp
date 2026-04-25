@@ -928,9 +928,25 @@ export async function saveAs({ name }) {
   const d = result?.data || {};
   const scriptId = d.scriptIdPart || d.id || d.script_id || null;
 
-  try { await openScript({ name: copyName }); } catch (_) {}
+  // After save/new, the editor still points at the previous script; reopen
+  // the new copy so subsequent pine_save writes back to the right identity.
+  // If the reopen fails, the save itself succeeded — surface the partial
+  // success instead of silently swallowing so callers can decide whether
+  // to retry or treat it as fatal.
+  let reopened = true;
+  let reopenError = null;
+  try {
+    await openScript({ name: copyName });
+  } catch (err) {
+    reopened = false;
+    reopenError = err.message;
+  }
 
-  return { success: true, action: 'save_as', name: copyName, script_id: scriptId };
+  return {
+    success: true, action: 'save_as', name: copyName, script_id: scriptId,
+    reopened,
+    ...(reopenError ? { reopen_error: reopenError, warning: `Saved as "${copyName}" but the editor still points at the original script. Subsequent pine_save will write back to the previous script — open "${copyName}" via pine_open to switch.` } : {}),
+  };
 }
 
 /**

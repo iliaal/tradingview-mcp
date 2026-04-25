@@ -342,9 +342,11 @@ export async function addBulk({ symbols }) {
   await new Promise(r => setTimeout(r, 500));
 
   const results = [];
+  // CDP modifier bits: 4 = meta (macOS Cmd), 2 = ctrl (Linux/Win Ctrl).
+  const selectAllMod = process.platform === 'darwin' ? 4 : 2;
   for (const sym of symbols) {
     // Select all text in input and replace with new symbol
-    await c.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 }); // Cmd+A
+    await c.Input.dispatchKeyEvent({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: selectAllMod });
     await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
     await new Promise(r => setTimeout(r, 100));
 

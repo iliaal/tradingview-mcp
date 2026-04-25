@@ -92,4 +92,37 @@ describe('core/tab.js — smoke', () => {
       /name \(string\) is required/i,
     );
   });
+
+  // Regression: a single hung target's CDP connection used to stall the whole
+  // list — Promise.all waits for every probe. _readActivePineScript now wraps
+  // each probe in a 2s timeout and falls through to null. The healthy probe
+  // returns its real value; the hung one returns null without holding things up.
+  it('test_list_smoke_pine_read_timeout_does_not_stall', async () => {
+    mockTabsFetch([
+      { id: 'fast', type: 'page', title: 'Live stock charts on AAPL', url: 'https://www.tradingview.com/chart/fast/' },
+      { id: 'hung', type: 'page', title: 'Live stock charts on NVDA', url: 'https://www.tradingview.com/chart/hung/' },
+    ]);
+    // Hung factory: connect returns a client whose evaluate never resolves.
+    const hungFactory = async ({ target }) => {
+      if (target === 'fast') {
+        return {
+          Runtime: { enable: async () => {}, evaluate: async () => ({ result: { value: 'Fast Script' } }) },
+          close: async () => {},
+        };
+      }
+      return {
+        Runtime: { enable: async () => {}, evaluate: () => new Promise(() => {}) },
+        close: async () => {},
+      };
+    };
+    const start = Date.now();
+    const r = await tab.list({ include_pine_script: true, _deps: { cdpFactory: hungFactory } });
+    const elapsed = Date.now() - start;
+    assert.equal(r.success, true);
+    assert.equal(r.tabs[0].pine_script, 'Fast Script');
+    assert.equal(r.tabs[1].pine_script, null);
+    // Timeout cap is 2s — give a little slack for CI variance, but well under
+    // the indefinite hang the bug used to cause.
+    assert.ok(elapsed < 4000, `list completed in ${elapsed}ms (timeout cap is 2s)`);
+  });
 });

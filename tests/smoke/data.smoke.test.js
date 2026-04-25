@@ -317,4 +317,35 @@ describe('core/data.js — smoke', () => {
     assert.ok(elapsed >= 100, `waited at least 100ms (got ${elapsed}ms)`);
     // Cap test would require waiting 5s+, skipping for fast suite.
   });
+
+  // Regression: batchReadPanes' readGraphics must unwrap WatchableValue with
+  // inner.get(false)._primitivesDataById, matching single-pane buildGraphicsJS.
+  // Earlier code dropped the .get(false) step so readGraphics returned [].
+  it('test_batchReadPanes_smoke_unwrap_path_in_expression', async () => {
+    let captured = '';
+    installCdpMocks({
+      evaluate: async (expr) => {
+        captured = String(expr);
+        return { layout: 's', pane_count: 1, panes: [] };
+      },
+    });
+    await data.batchReadPanes({ reads: { pine_lines: {} } });
+    assert.match(captured, /inner\.get\(false\)/);
+    assert.match(captured, /coll\._primitivesDataById/);
+  });
+
+  // Regression: buildGraphicsJS pushes a per-study item cap into the IIFE so
+  // huge label sets aren't shipped over CDP just to be sliced server-side.
+  it('test_getPineLabels_smoke_passes_cap_into_iife', async () => {
+    let captured = '';
+    installCdpMocks({
+      evaluate: async (expr) => {
+        captured = String(expr);
+        return [];
+      },
+    });
+    await data.getPineLabels({ max_labels: 17 });
+    assert.match(captured, /var maxItems = 17/);
+    assert.match(captured, /items\.slice\(-maxItems\)/);
+  });
 });

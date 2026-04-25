@@ -199,6 +199,34 @@ describe('core/pine.js — smoke', () => {
     assert.equal(r.action, 'save_as');
     assert.equal(r.name, 'My Copy');
     assert.equal(r.script_id, 'new-id');
+    assert.equal(r.reopened, true);
+  });
+
+  // Regression: when openScript fails after save/new, saveAs used to swallow
+  // the error and falsely report success — leaving the editor pointed at the
+  // previous script so subsequent pine_save would clobber the wrong script.
+  it('test_saveAs_smoke_surfaces_reopen_failure', async () => {
+    let evalIdx = 0;
+    let asyncIdx = 0;
+    installCdpMocks({
+      evaluate: async () => {
+        evalIdx++;
+        if (evalIdx === 1) return true;
+        return 'indicator("test")\nplot(close)';
+      },
+      evaluateAsync: async () => {
+        asyncIdx++;
+        if (asyncIdx === 1) return { status: 200, data: { scriptIdPart: 'new-id', name: 'My Copy' } };
+        // openScript fails on the next call (list/get throws)
+        throw new Error('openScript: dropdown not found');
+      },
+    });
+    const r = await pine.saveAs({ name: 'My Copy' });
+    assert.equal(r.success, true);
+    assert.equal(r.action, 'save_as');
+    assert.equal(r.reopened, false);
+    assert.match(r.reopen_error, /dropdown not found/);
+    assert.match(r.warning, /editor still points at the original script/);
   });
 
   it('test_saveAs_smoke_throws_on_save_failure', async () => {

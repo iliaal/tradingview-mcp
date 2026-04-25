@@ -19,17 +19,16 @@ export function registerHealthTools(server) {
   });
 
   server.tool('tv_launch', 'Launch TradingView Desktop with Chrome DevTools Protocol (remote debugging) enabled. Auto-detects install location on Mac, Windows, Linux, and Windows MSIX (Microsoft Store) on native or WSL.', {
-    port: z.coerce.number().optional().describe('CDP port (default 9222)'),
+    port: z.coerce.number().optional().describe('CDP port (default: matches the MCP server\'s configured port, env TV_CDP_PORT or 9222). Passing a non-default port launches TV on that port but the MCP server cannot talk to it without TV_CDP_PORT and a restart.'),
     kill_existing: z.coerce.boolean().optional().describe('Kill existing TradingView instances first (default true)'),
   }, async ({ port, kill_existing }) => {
     try { return jsonResult(await core.launch({ port, kill_existing })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('tv_ensure', 'Ensure TradingView Desktop is running with CDP enabled. Idempotent: no-op if CDP is already up. If TV is running without CDP, kills and relaunches. If TV is not running, launches it. Call this before any TV tool when unsure if CDP is available.', {
-    port: z.coerce.number().optional().describe('CDP port (default 9222)'),
-  }, async ({ port }) => {
-    try { return jsonResult(await core.ensureCDP({ port })); }
+  server.tool('tv_ensure', 'Ensure TradingView Desktop is running with CDP enabled. Idempotent: no-op if CDP is already up. If TV is running without CDP, kills and relaunches. If TV is not running, launches it. Call this before any TV tool when unsure if CDP is available. Uses the MCP server\'s configured CDP port (default 9222, override via TV_CDP_PORT env var).', {
+  }, async () => {
+    try { return jsonResult(await core.ensureCDP()); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

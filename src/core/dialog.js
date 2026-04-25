@@ -69,16 +69,50 @@ export async function dismissBlockingDialogs({ evaluate = _evaluate } = {}) {
       var patterns = ${DISMISS_PATTERNS_JSON};
       var dismissed = [];
       var alreadyMatched = {};
-      // Scan every visible div / section. Two pattern types:
+      // Two pattern types:
       //   match (regex on textContent, length-bounded for sanity) — used for
       //     dialogs with a clear short-text body.
       //   button_set (array of exact button-text strings) — used when the
       //     dialog's text bleeds into a surrounding container (e.g. Pine
       //     editor's Save Script prompt). Matches when ALL listed labels
       //     appear among the element's visible buttons AND the button-set
-      //     count is small enough to be a dialog (< 8 buttons in the
-      //     scope), excluding nested matches.
-      var candidates = document.querySelectorAll('div, section');
+      //     count is small enough to be a dialog.
+      // Fast-path narrow selector covers role="dialog" + dialog/popup/modal
+      // class shapes. TV's modals all use one of these. Falls back to a
+      // wider scan only when patterns exist that need text-bleed coverage
+      // (button_set), and even then we limit to elements that contain at
+      // least one button — most divs in the chart canvas don't.
+      var hasButtonSet = false;
+      for (var pi = 0; pi < patterns.length; pi++) {
+        if (patterns[pi].button_set) { hasButtonSet = true; break; }
+      }
+      var narrow = document.querySelectorAll(
+        '[role="dialog"], [class*="dialog"], [class*="Dialog"], ' +
+        '[class*="popup"], [class*="Popup"], ' +
+        '[class*="modal"], [class*="Modal"], ' +
+        '[data-name*="dialog"], [data-name*="popup"]'
+      );
+      var candidates;
+      if (hasButtonSet) {
+        // Combine narrow set with all button-bearing visible containers,
+        // deduped via a Set. Cheaper than querying every div, since most
+        // panes in the chart canvas have zero buttons.
+        var buttons = document.querySelectorAll('button');
+        var seen = new Set();
+        for (var ni = 0; ni < narrow.length; ni++) seen.add(narrow[ni]);
+        for (var bi = 0; bi < buttons.length; bi++) {
+          var bp = buttons[bi].parentElement;
+          // Walk up at most 5 levels — dialog containers typically wrap
+          // their button bar within a small subtree.
+          for (var depth = 0; depth < 5 && bp; depth++) {
+            seen.add(bp);
+            bp = bp.parentElement;
+          }
+        }
+        candidates = Array.from(seen);
+      } else {
+        candidates = narrow;
+      }
       for (var i = 0; i < candidates.length; i++) {
         var el = candidates[i];
         if (el.offsetParent === null) continue;

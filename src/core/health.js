@@ -1,7 +1,7 @@
 /**
  * Core health/discovery/launch/reconnect logic.
  */
-import { getClient, getTargetInfo, evaluate, disconnect } from '../connection.js';
+import { getClient, getTargetInfo, evaluate, disconnect, CDP_PORT } from '../connection.js';
 import { waitForChartReady } from '../wait.js';
 import { existsSync, readFileSync } from 'fs';
 import { execSync, spawn } from 'child_process';
@@ -199,7 +199,8 @@ export async function uiState() {
 }
 
 export async function launch({ port, kill_existing } = {}) {
-  const cdpPort = port || 9222;
+  const cdpPort = port || CDP_PORT;
+  const portMismatch = port && port !== CDP_PORT;
   const killFirst = kill_existing !== false;
   const platform = process.platform;
   const wsl = isWsl();
@@ -224,6 +225,7 @@ export async function launch({ port, kill_existing } = {}) {
         cdp_url: `http://localhost:${cdpPort}`,
         browser: info.Browser, user_agent: info['User-Agent'],
         already_running: true,
+        ...(portMismatch ? { warning: `Launched on port ${cdpPort} but the MCP server's CDP client is bound to ${CDP_PORT}. Set TV_CDP_PORT=${cdpPort} and restart the server, or relaunch on ${CDP_PORT}.` } : {}),
       };
     }
   } catch { /* fall through to launch */ }
@@ -330,6 +332,10 @@ export async function launch({ port, kill_existing } = {}) {
     });
 
     if (spawnFailed) {
+      // Fallback path replaces the dead child with a new handle when possible
+      // (bare spawn). open -a on macOS gives us no pid — we set child = null
+      // and the result emits pid: null. Either way the CDP poll below is what
+      // confirms readiness, not the pid value.
       child = null;
       if (platform === 'darwin') {
         // open -a only attaches args to a fresh launch — kill any running TV
@@ -343,18 +349,17 @@ export async function launch({ port, kill_existing } = {}) {
             execSync(`open -a "${appBundle.split('"').join('')}" --args --remote-debugging-port=${cdpPort}`, { timeout: 5000, stdio: 'ignore' });
           } catch { /* open returns non-zero even on success sometimes */ }
         } else {
-          // No .app bundle — last resort: bare launch.
-          const fb = spawn(tvPath, [], { detached: true, stdio: 'ignore' });
-          fb.unref();
+          child = spawn(tvPath, [], { detached: true, stdio: 'ignore' });
+          child.unref();
         }
       } else {
         // Linux / Windows fallback: env-var hint + bare launch in case TV
         // accepts the flag via env even when CLI parsing rejects it.
-        const fallback = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], {
+        child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], {
           detached: true, stdio: 'ignore',
           env: { ...process.env, REMOTE_DEBUGGING_PORT: String(cdpPort) },
         });
-        fallback.unref();
+        child.unref();
       }
     } else {
       child.unref();
@@ -375,17 +380,20 @@ export async function launch({ port, kill_existing } = {}) {
       if (ready) {
         const info = JSON.parse(ready);
         return {
-          success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child.pid,
+          success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child?.pid ?? null,
           cdp_port: cdpPort, cdp_url: `http://localhost:${cdpPort}`,
           browser: info.Browser, user_agent: info['User-Agent'],
+          ...(portMismatch ? { warning: `Launched on port ${cdpPort} but the MCP server's CDP client is bound to ${CDP_PORT}. Set TV_CDP_PORT=${cdpPort} and restart the server, or relaunch on ${CDP_PORT}.` } : {}),
         };
       }
     } catch { /* retry */ }
   }
 
   return {
-    success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child.pid, cdp_port: cdpPort, cdp_ready: false,
-    warning: 'TradingView launched but CDP not responding yet. It may still be loading. Try tv_health_check in a few seconds.',
+    success: true, platform: wsl ? 'wsl' : platform, binary: tvPath, pid: child?.pid ?? null, cdp_port: cdpPort, cdp_ready: false,
+    warning: portMismatch
+      ? `TradingView launched on port ${cdpPort} but CDP is not yet responding. Note: the MCP server's CDP client is bound to ${CDP_PORT} — set TV_CDP_PORT=${cdpPort} and restart the server to talk to this instance.`
+      : 'TradingView launched but CDP not responding yet. It may still be loading. Try tv_health_check in a few seconds.',
   };
 }
 
@@ -395,8 +403,14 @@ export async function launch({ port, kill_existing } = {}) {
  * If TV is running without CDP, kills it and relaunches with the debug port.
  * If TV isn't running at all, launches it fresh.
  */
-export async function ensureCDP({ port } = {}) {
-  const cdpPort = port || 9222;
+export async function ensureCDP() {
+  // The MCP server's CDP client is bound to CDP_HOST/CDP_PORT at module load
+  // (configured via env vars TV_CDP_HOST/TV_CDP_PORT). ensureCDP can only
+  // meaningfully manage the port the client is bound to — accepting a
+  // per-call port would launch on it but leave subsequent calls talking to
+  // the env-configured port instead. Use TV_CDP_PORT and restart the server
+  // to point at a different instance.
+  const cdpPort = CDP_PORT;
   const http = await import('http');
 
   // Step 1: Check if CDP is already responding
@@ -453,7 +467,7 @@ export async function ensureCDP({ port } = {}) {
   } catch { /* not running */ }
 
   // Step 3: Launch (handles kill + relaunch + polling)
-  const result = await launch({ port: cdpPort, kill_existing: tvRunning });
+  const result = await launch({ kill_existing: tvRunning });
   return {
     ...result,
     action: tvRunning ? 'restarted' : 'launched',

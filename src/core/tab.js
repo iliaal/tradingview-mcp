@@ -8,10 +8,15 @@ import { getClient, evaluate, connectToTarget } from '../connection.js';
 const CDP_HOST = process.env.TV_CDP_HOST || 'localhost';
 const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
 
+// Per-target Pine read timeout. A single hung target (e.g., one that's
+// mid-navigation) would otherwise stall the whole `tab list` fan-out.
+const PINE_READ_TIMEOUT_MS = 2000;
+
 /**
  * Open a short-lived CDP client for a specific target and read its Pine
  * editor's currently-active script name (if any). Returns null when the
- * Pine editor isn't open in that tab or the read fails.
+ * Pine editor isn't open in that tab, the read fails, or the read takes
+ * longer than PINE_READ_TIMEOUT_MS.
  *
  * Walks the title-button DOM rather than a JS API since the latter requires
  * the React fiber dance our FIND_MONACO does, which is slow per-tab. The
@@ -22,25 +27,36 @@ const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
  */
 async function _readActivePineScript(targetId, cdpFactory = CDP) {
   let c;
+  let timer;
+  const sentinel = Symbol('timeout');
   try {
-    c = await cdpFactory({ host: CDP_HOST, port: CDP_PORT, target: targetId });
-    await c.Runtime.enable();
-    const { result } = await c.Runtime.evaluate({
-      expression: `
-        (function() {
-          var btn = document.querySelector('[data-qa-id="pine-script-title-button"]');
-          if (!btn) return null;
-          var h2 = btn.querySelector('h2') || btn;
-          var name = (h2.textContent || '').trim();
-          return name || null;
-        })()
-      `,
-      returnByValue: true,
+    const work = (async () => {
+      c = await cdpFactory({ host: CDP_HOST, port: CDP_PORT, target: targetId });
+      await c.Runtime.enable();
+      const { result } = await c.Runtime.evaluate({
+        expression: `
+          (function() {
+            var btn = document.querySelector('[data-qa-id="pine-script-title-button"]');
+            if (!btn) return null;
+            var h2 = btn.querySelector('h2') || btn;
+            var name = (h2.textContent || '').trim();
+            return name || null;
+          })()
+        `,
+        returnByValue: true,
+      });
+      return result?.value || null;
+    })();
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(sentinel), PINE_READ_TIMEOUT_MS);
     });
-    return result?.value || null;
+    const winner = await Promise.race([work, timeout]);
+    if (winner === sentinel) return null;
+    return winner;
   } catch {
     return null;
   } finally {
+    if (timer) clearTimeout(timer);
     if (c) try { await c.close(); } catch {}
   }
 }
