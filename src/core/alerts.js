@@ -1,75 +1,188 @@
 /**
  * Core alert logic.
+ *
+ * TV's alert dialog uses hashed CSS-module class names that change per release.
+ * We locate elements by stable structural/text features instead of class names:
+ *   - Dialog: find an element containing the text "Create alert on"
+ *   - Price input: the <fieldset> whose <legend> reads "Value" contains the price input
+ *   - Create/Cancel buttons: matched by textContent in the dialog footer
+ *   - Message: a <button data-qa-id="alert-message-button"> opens a sub-dialog
  */
 import { evaluate, evaluateAsync, getClient, safeString } from '../connection.js';
 
-export async function create({ condition, price, message }) {
-  const opened = await evaluate(`
-    (function() {
-      var btn = document.querySelector('[aria-label="Create Alert"]')
-        || document.querySelector('[data-name="alerts"]');
-      if (btn) { btn.click(); return true; }
-      return false;
-    })()
-  `);
+const DIALOG_RE = '/Create alert on/i';
 
-  if (!opened) {
-    const client = await getClient();
-    await client.Input.dispatchKeyEvent({ type: 'keyDown', modifiers: 1, key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
-    await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
-  }
+async function openDialog() {
+  // Try keyboard shortcut Alt+A first — most reliable across TV UI revisions.
+  const client = await getClient();
+  await client.Input.dispatchKeyEvent({
+    type: 'keyDown',
+    modifiers: 1, // Alt
+    key: 'a',
+    code: 'KeyA',
+    windowsVirtualKeyCode: 65,
+  });
+  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
 
-  await new Promise(r => setTimeout(r, 1000));
-
-  const priceSet = await evaluate(`
-    (function() {
-      var inputs = document.querySelectorAll('[class*="alert"] input[type="text"], [class*="alert"] input[type="number"]');
-      for (var i = 0; i < inputs.length; i++) {
-        var label = inputs[i].closest('[class*="row"]')?.querySelector('[class*="label"]');
-        if (label && /value|price/i.test(label.textContent)) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-          nativeSet.call(inputs[i], ${safeString(String(price))});
-          inputs[i].dispatchEvent(new Event('input', { bubbles: true }));
-          inputs[i].dispatchEvent(new Event('change', { bubbles: true }));
-          return true;
-        }
-      }
-      if (inputs.length > 0) {
-        var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-        nativeSet.call(inputs[0], ${safeString(String(price))});
-        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-        return true;
-      }
-      return false;
-    })()
-  `);
-
-  if (message) {
-    await evaluate(`
+  // Poll for the dialog up to ~2s.
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 100));
+    const found = await evaluate(`
       (function() {
-        var textarea = document.querySelector('[class*="alert"] textarea')
-          || document.querySelector('textarea[placeholder*="message"]');
-        if (textarea) {
-          var nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-          nativeSet.call(textarea, ${JSON.stringify(message)});
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        var els = document.querySelectorAll('[class*="dialog"]');
+        for (var i = 0; i < els.length; i++) {
+          if (${DIALOG_RE}.test(els[i].textContent || '')) return true;
         }
+        return false;
       })()
     `);
+    if (found) return true;
+  }
+  return false;
+}
+
+export async function create({ condition, price, message }) {
+  const opened = await openDialog();
+  if (!opened) {
+    return { success: false, price, condition, message: message || '(none)', price_set: false, error: 'dialog_not_opened' };
   }
 
-  await new Promise(r => setTimeout(r, 500));
+  // Set the price in the "Value" fieldset's input.
+  const priceSet = await evaluate(`
+    (function() {
+      var dialogs = document.querySelectorAll('[class*="dialog"]');
+      var dialog = null;
+      for (var i = 0; i < dialogs.length; i++) {
+        if (${DIALOG_RE}.test(dialogs[i].textContent || '')) { dialog = dialogs[i]; break; }
+      }
+      if (!dialog) return { ok: false, reason: 'no_dialog' };
+
+      var fieldsets = dialog.querySelectorAll('fieldset');
+      var target = null;
+      for (var i = 0; i < fieldsets.length; i++) {
+        var legend = fieldsets[i].querySelector('legend');
+        var text = (legend && legend.textContent || '').trim();
+        if (/^value$/i.test(text)) { target = fieldsets[i]; break; }
+      }
+      // Fallback: first fieldset containing a visible text/number input.
+      if (!target) {
+        for (var i = 0; i < fieldsets.length; i++) {
+          var inp = fieldsets[i].querySelector('input[type="text"], input[type="number"]');
+          if (inp && inp.offsetParent !== null) { target = fieldsets[i]; break; }
+        }
+      }
+      if (!target) return { ok: false, reason: 'no_value_fieldset' };
+
+      var input = target.querySelector('input[type="text"], input[type="number"]');
+      if (!input) return { ok: false, reason: 'no_input' };
+
+      var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      nativeSet.call(input, ${safeString(String(price))});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      input.blur();
+      return { ok: true, value: input.value };
+    })()
+  `);
+
+  // Optional: set message. The "Message" field is a button that opens a sub-dialog.
+  let messageSet = false;
+  if (message) {
+    const messageOpened = await evaluate(`
+      (function() {
+        var btn = document.querySelector('button[data-qa-id="alert-message-button"]');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      })()
+    `);
+    if (messageOpened) {
+      // Wait for sub-dialog and its textarea/input to appear.
+      for (let i = 0; i < 15; i++) {
+        await new Promise(r => setTimeout(r, 100));
+        const set = await evaluate(`
+          (function() {
+            var dialogs = document.querySelectorAll('[class*="dialog"]');
+            // The most recently opened dialog is typically last in DOM order.
+            for (var i = dialogs.length - 1; i >= 0; i--) {
+              var d = dialogs[i];
+              if (${DIALOG_RE}.test(d.textContent || '')) continue; // skip parent
+              var ta = d.querySelector('textarea');
+              if (ta && ta.offsetParent !== null) {
+                var nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+                nativeSet.call(ta, ${JSON.stringify(message)});
+                ta.dispatchEvent(new Event('input', { bubbles: true }));
+                ta.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+            }
+            return false;
+          })()
+        `);
+        if (set) { messageSet = true; break; }
+      }
+      // Close the sub-dialog by clicking its OK/Apply/Save button, or Escape fallback.
+      await new Promise(r => setTimeout(r, 100));
+      const closed = await evaluate(`
+        (function() {
+          var dialogs = document.querySelectorAll('[class*="dialog"]');
+          for (var i = dialogs.length - 1; i >= 0; i--) {
+            var d = dialogs[i];
+            if (${DIALOG_RE}.test(d.textContent || '')) continue;
+            var btns = d.querySelectorAll('button');
+            for (var j = 0; j < btns.length; j++) {
+              var t = (btns[j].textContent || '').trim();
+              if (/^(ok|apply|save|done)$/i.test(t)) { btns[j].click(); return true; }
+            }
+          }
+          return false;
+        })()
+      `);
+      if (!closed) {
+        const client = await getClient();
+        await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+        await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+
+  // Click Create in the main dialog footer.
+  await new Promise(r => setTimeout(r, 300));
   const created = await evaluate(`
     (function() {
-      var btns = document.querySelectorAll('button[data-name="submit"], button');
+      var dialogs = document.querySelectorAll('[class*="dialog"]');
+      var dialog = null;
+      for (var i = 0; i < dialogs.length; i++) {
+        if (${DIALOG_RE}.test(dialogs[i].textContent || '')) { dialog = dialogs[i]; break; }
+      }
+      if (!dialog) return false;
+      var btns = dialog.querySelectorAll('button');
+      // Prefer submit-typed button with text "Create".
       for (var i = 0; i < btns.length; i++) {
-        if (/^create$/i.test(btns[i].textContent.trim())) { btns[i].click(); return true; }
+        var t = (btns[i].textContent || '').trim();
+        if (btns[i].type === 'submit' && /^create$/i.test(t)) { btns[i].click(); return true; }
+      }
+      for (var i = 0; i < btns.length; i++) {
+        var t = (btns[i].textContent || '').trim();
+        if (/^create$/i.test(t)) { btns[i].click(); return true; }
       }
       return false;
     })()
   `);
 
-  return { success: !!created, price, condition, message: message || '(none)', price_set: !!priceSet, source: 'dom_fallback' };
+  const ok = !!(created && priceSet && priceSet.ok);
+  return {
+    success: ok,
+    price,
+    condition,
+    message: message || '(none)',
+    price_set: !!(priceSet && priceSet.ok),
+    message_set: messageSet,
+    price_value: priceSet && priceSet.value,
+    error: ok ? undefined : (priceSet && priceSet.reason) || (!created ? 'create_button_not_found' : 'unknown'),
+    source: 'dom_fallback',
+  };
 }
 
 export async function list() {

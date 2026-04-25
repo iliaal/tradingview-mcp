@@ -6,8 +6,34 @@
 import { evaluate, evaluateAsync, getClient } from '../connection.js';
 
 // ── Monaco finder (injected into TV page) ──
+//
+// Resolves TV's Pine Editor Monaco instance via two paths:
+//
+//   1. FAST PATH: window.monaco.editor.getEditors() — direct Monaco API,
+//      filtered to the editor whose container sits under .pine-editor-monaco.
+//      Works whenever TV exposes the global monaco namespace (most builds
+//      since TV Desktop 3.x). No React-fiber traversal; robust under
+//      transitional fiber states (mid-render, post-setValue, post-pine_new).
+//
+//   2. FALLBACK: React fiber walk — original behaviour. Used when the fast
+//      path is unavailable (older TV builds, or window.monaco not exposed).
 const FIND_MONACO = `
   (function findMonacoEditor() {
+    // Fast path: direct Monaco API
+    try {
+      if (window.monaco && window.monaco.editor && typeof window.monaco.editor.getEditors === 'function') {
+        var allEditors = window.monaco.editor.getEditors();
+        for (var j = 0; j < allEditors.length; j++) {
+          var ed = allEditors[j];
+          var node = typeof ed.getContainerDomNode === 'function' ? ed.getContainerDomNode() : null;
+          if (node && node.closest && node.closest('.pine-editor-monaco')) {
+            return { editor: ed, env: { editor: window.monaco.editor } };
+          }
+        }
+      }
+    } catch (e) { /* fall through to fiber walk */ }
+
+    // Fallback: React fiber walk
     var container = document.querySelector('.monaco-editor.pine-editor-monaco');
     if (!container) return null;
     var el = container;
@@ -35,9 +61,40 @@ const FIND_MONACO = `
   })()
 `;
 
+// Pine Editor panel-open trigger. Idempotent — safe to re-invoke during the
+// poll loop in ensurePineEditorOpen when the panel self-closes between calls
+// (observed on TV 3.1 after pine_new or failed setValue).
+//
+// Calls BOTH the API method and the toolbar button click, in that order.
+// On TV Desktop 3.1.0 the bottomWidgetBar API methods (activateScriptEditorTab,
+// showWidget) are silent no-ops — _enabledWidgets is empty and the widget
+// system was reworked to use WatchableValue. The button click is what
+// actually opens the panel on current builds. Older builds still respond to
+// the API calls. Calling both is harmless (idempotent) and covers both eras.
+const OPEN_PINE_PANEL = `
+  (function() {
+    var actions = [];
+    var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
+    if (bwb) {
+      try {
+        if (typeof bwb.activateScriptEditorTab === 'function') { bwb.activateScriptEditorTab(); actions.push('activateScriptEditorTab'); }
+        else if (typeof bwb.showWidget === 'function') { bwb.showWidget('pine-editor'); actions.push('showWidget'); }
+      } catch(e) {}
+    }
+    var btn = document.querySelector('[data-name="pine-dialog-button"]')
+      || document.querySelector('[aria-label="Pine"]');
+    if (btn) { btn.click(); actions.push('button-click'); }
+    return actions.length ? actions.join('+') : null;
+  })()
+`;
+
 /**
  * Opens the Pine Editor panel and waits for Monaco to become available.
  * Returns true if editor is accessible, false on timeout.
+ *
+ * Re-invokes the panel-open trigger every 2s during the poll, to recover
+ * from transitional states where the panel auto-closes or Monaco hasn't yet
+ * settled.
  */
 export async function ensurePineEditorOpen() {
   const already = await evaluate(`
@@ -48,27 +105,17 @@ export async function ensurePineEditorOpen() {
   `);
   if (already) return true;
 
-  await evaluate(`
-    (function() {
-      var bwb = window.TradingView && window.TradingView.bottomWidgetBar;
-      if (!bwb) return;
-      if (typeof bwb.activateScriptEditorTab === 'function') bwb.activateScriptEditorTab();
-      else if (typeof bwb.showWidget === 'function') bwb.showWidget('pine-editor');
-    })()
-  `);
-
-  await evaluate(`
-    (function() {
-      var btn = document.querySelector('[aria-label="Pine"]')
-        || document.querySelector('[data-name="pine-dialog-button"]');
-      if (btn) btn.click();
-    })()
-  `);
+  await evaluate(OPEN_PINE_PANEL);
 
   for (let i = 0; i < 50; i++) {
     await new Promise(r => setTimeout(r, 200));
     const ready = await evaluate(`(function() { return ${FIND_MONACO} !== null; })()`);
     if (ready) return true;
+    // Re-invoke the panel-open trigger every 2s — idempotent, no-op if
+    // panel is already open, recovers if the panel self-closed.
+    if (i > 0 && i % 10 === 0) {
+      await evaluate(OPEN_PINE_PANEL);
+    }
   }
   return false;
 }
@@ -268,17 +315,55 @@ export async function setSource({ source }) {
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const escaped = JSON.stringify(source);
-  const set = await evaluate(`
+
+  // Monaco setValue() is synchronous and can freeze the renderer on large
+  // scripts, deadlocking the CDP evaluate() round-trip. Run the work via
+  // setTimeout(..., 0) so the eval call returns immediately, then poll a
+  // window-scoped status flag for completion. Use pushEditOperations when
+  // a model is available (better batching, preserves undo stack).
+  const token = `__pineSetSource_${Date.now()}`;
+  await evaluate(`
     (function() {
-      var m = ${FIND_MONACO};
-      if (!m) return false;
-      m.editor.setValue(${escaped});
-      return true;
+      window.${token} = 'pending';
+      setTimeout(function() {
+        try {
+          var m = ${FIND_MONACO};
+          if (!m) { window.${token} = 'no_editor'; return; }
+          var model = m.editor.getModel();
+          if (model) {
+            var fullRange = model.getFullModelRange();
+            model.pushEditOperations([], [{ range: fullRange, text: ${escaped} }], function() { return null; });
+          } else {
+            m.editor.setValue(${escaped});
+          }
+          window.${token} = 'done';
+        } catch(e) { window.${token} = 'error:' + e.message; }
+      }, 0);
     })()
   `);
 
-  if (!set) throw new Error('Monaco found but setValue() failed.');
-  return { success: true, lines_set: source.split('\n').length };
+  const maxWait = 15000;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    await new Promise(r => setTimeout(r, 200));
+    const status = await evaluate(`window.${token}`);
+    if (status === 'done') {
+      await evaluate(`delete window.${token}`);
+      return { success: true, lines_set: source.split('\n').length };
+    }
+    if (status === 'no_editor') {
+      await evaluate(`delete window.${token}`);
+      throw new Error('Monaco editor not found during setValue().');
+    }
+    if (status && status.startsWith('error:')) {
+      const msg = status.slice(6);
+      await evaluate(`delete window.${token}`);
+      throw new Error(`Monaco setValue() failed: ${msg}`);
+    }
+  }
+
+  await evaluate(`delete window.${token}`);
+  throw new Error('Pine Editor setValue() timed out after 15s. The script may be too large or the editor is unresponsive.');
 }
 
 export async function compile() {
@@ -289,21 +374,26 @@ export async function compile() {
     (function() {
       var btns = document.querySelectorAll('button');
       var fallback = null;
+      var fallbackLabel = null;
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
         var text = btns[i].textContent.trim();
-        if (/save and add to chart/i.test(text)) {
+        // TV Desktop 3.1.0+ ships these as icon-only buttons; label lives in the title attr.
+        var title = btns[i].getAttribute('title') || '';
+        var label = text || title;
+        if (/save and add to chart/i.test(label)) {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!fallback && /^(Add to chart|Update on chart)/i.test(text)) {
+        if (!fallback && /^(Add to chart|Update on chart)$/i.test(label)) {
           fallback = btns[i];
+          fallbackLabel = label;
         }
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) {
           saveBtn = btns[i];
         }
       }
-      if (fallback) { fallback.click(); return fallback.textContent.trim(); }
+      if (fallback) { fallback.click(); return fallbackLabel; }
       if (saveBtn) { saveBtn.click(); return 'Pine Save'; }
       return null;
     })()
@@ -448,12 +538,15 @@ export async function smartCompile() {
       var saveBtn = null;
       for (var i = 0; i < btns.length; i++) {
         var text = btns[i].textContent.trim();
-        if (/save and add to chart/i.test(text)) {
+        // TV Desktop 3.1.0+ ships these as icon-only buttons; label lives in the title attr.
+        var title = btns[i].getAttribute('title') || '';
+        var label = text || title;
+        if (/save and add to chart/i.test(label)) {
           btns[i].click();
           return 'Save and add to chart';
         }
-        if (!addBtn && /^add to chart$/i.test(text)) addBtn = btns[i];
-        if (!updateBtn && /^update on chart$/i.test(text)) updateBtn = btns[i];
+        if (!addBtn && /^add to chart$/i.test(label)) addBtn = btns[i];
+        if (!updateBtn && /^update on chart$/i.test(label)) updateBtn = btns[i];
         if (!saveBtn && btns[i].className.indexOf('saveButton') !== -1 && btns[i].offsetParent !== null) saveBtn = btns[i];
       }
       if (addBtn) { addBtn.click(); return 'Add to chart'; }

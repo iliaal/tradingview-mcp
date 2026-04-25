@@ -127,6 +127,9 @@ export async function focus({ index }) {
   `);
 
   if (result?.error) throw new Error(result.error);
+  // _activeChartWidgetWV updates asynchronously after the click; subsequent
+  // calls that read CHART_API will hit the previous pane without this delay.
+  await new Promise(r => setTimeout(r, 300));
   return { success: true, focused_index: result.focused, total_panes: result.total };
 }
 

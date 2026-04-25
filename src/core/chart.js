@@ -2,7 +2,7 @@
  * Core chart control logic.
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, safeString, requireFinite } from '../connection.js';
-import { waitForChartReady as _waitForChartReady } from '../wait.js';
+import { waitForChartReady as _waitForChartReady, waitForStudiesReady as _waitForStudiesReady } from '../wait.js';
 
 const CHART_API = 'window.TradingViewApi._activeChartWidgetWV.value()';
 
@@ -11,6 +11,7 @@ function _resolve(deps) {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
+    waitForStudiesReady: deps?.waitForStudiesReady || _waitForStudiesReady,
   };
 }
 
@@ -38,7 +39,7 @@ export async function getState({ _deps } = {}) {
 }
 
 export async function setSymbol({ symbol, _deps }) {
-  const { evaluateAsync, waitForChartReady } = _resolve(_deps);
+  const { evaluateAsync, waitForChartReady, waitForStudiesReady } = _resolve(_deps);
   await evaluateAsync(`
     (function() {
       var chart = ${CHART_API};
@@ -49,11 +50,12 @@ export async function setSymbol({ symbol, _deps }) {
     })()
   `);
   const ready = await waitForChartReady(symbol);
-  return { success: true, symbol, chart_ready: ready };
+  const studies_ready = await waitForStudiesReady();
+  return { success: true, symbol, chart_ready: ready, studies_ready };
 }
 
 export async function setTimeframe({ timeframe, _deps }) {
-  const { evaluate, waitForChartReady } = _resolve(_deps);
+  const { evaluate, waitForChartReady, waitForStudiesReady } = _resolve(_deps);
   await evaluate(`
     (function() {
       var chart = ${CHART_API};
@@ -61,7 +63,8 @@ export async function setTimeframe({ timeframe, _deps }) {
     })()
   `);
   const ready = await waitForChartReady(null, timeframe);
-  return { success: true, timeframe, chart_ready: ready };
+  const studies_ready = await waitForStudiesReady();
+  return { success: true, timeframe, chart_ready: ready, studies_ready };
 }
 
 export async function setType({ chart_type, _deps }) {
@@ -115,7 +118,8 @@ export async function manageIndicator({ action, indicator, entity_id, inputs: in
   }
 }
 
-export async function getVisibleRange() {
+export async function getVisibleRange({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const result = await evaluate(`
     (function() {
       var chart = ${CHART_API};
@@ -157,7 +161,8 @@ export async function setVisibleRange({ from, to, _deps }) {
   return { success: true, requested: { from, to }, actual: actual || { from: 0, to: 0 } };
 }
 
-export async function scrollToDate({ date }) {
+export async function scrollToDate({ date, _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   let timestamp;
   if (/^\d+$/.test(date)) timestamp = Number(date);
   else timestamp = Math.floor(new Date(date).getTime() / 1000);
@@ -196,16 +201,41 @@ export async function scrollToDate({ date }) {
   return { success: true, date, centered_on: timestamp, resolution, window: { from, to } };
 }
 
-export async function symbolInfo() {
+export async function symbolInfo({ _deps } = {}) {
+  const { evaluate } = _resolve(_deps);
   const result = await evaluate(`
     (function() {
       var chart = ${CHART_API};
-      var info = chart.symbolExt();
-      return {
-        symbol: info.symbol, full_name: info.full_name, exchange: info.exchange,
-        description: info.description, type: info.type, pro_name: info.pro_name,
-        typespecs: info.typespecs, resolution: chart.resolution(), chart_type: chart.chartType()
-      };
+      // TV Desktop 3.1.0 removed chart.symbolExt(); fall back to symbolInfo()
+      // (returns full info object), then symbol() as a last resort.
+      var info = null;
+      try { if (typeof chart.symbolExt === 'function') info = chart.symbolExt(); } catch(e) {}
+      if (!info) {
+        try { if (typeof chart.symbolInfo === 'function') info = chart.symbolInfo(); } catch(e) {}
+      }
+      var symbol = '';
+      try { symbol = chart.symbol(); } catch(e) {}
+      var resolution = '';
+      try { resolution = chart.resolution(); } catch(e) {}
+      var chart_type = null;
+      try { chart_type = chart.chartType(); } catch(e) {}
+      if (info) {
+        return {
+          symbol: info.symbol || symbol,
+          full_name: info.full_name || info.fullName,
+          exchange: info.exchange,
+          description: info.description,
+          type: info.type,
+          pro_name: info.pro_name || info.proName,
+          typespecs: info.typespecs,
+          resolution: resolution,
+          chart_type: chart_type,
+          source: 'symbolExt_or_symbolInfo'
+        };
+      }
+      // Minimal fallback — only the symbol string is reliably available on
+      // TV 3.1.0 without the symbolExt API.
+      return { symbol: symbol, resolution: resolution, chart_type: chart_type, source: 'symbol_only' };
     })()
   `);
   return { success: true, ...result };
