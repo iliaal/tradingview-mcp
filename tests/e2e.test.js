@@ -76,6 +76,52 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       Runtime = client.Runtime;
       Input = client.Input;
       Page = client.Page;
+
+      // Reset any lingering state from a previous run before test execution.
+      // Stops replay if active, hides the replay toolbar, and dismisses any
+      // 'Leave current replay?' / unsaved-changes dialogs left over from a
+      // prior session — without this, every chart_set_symbol downstream hangs
+      // on a blocking modal that has no role='dialog' marker.
+      try {
+        await evaluate(`
+          (function() {
+            try {
+              var api = window.TradingViewApi && window.TradingViewApi._replayApi;
+              if (api && typeof api.stopReplay === 'function') api.stopReplay();
+              if (api && typeof api.hideReplayToolbar === 'function') api.hideReplayToolbar();
+            } catch(e) {}
+          })()
+        `);
+        // Dismiss known modal dialogs (Leave current replay, unsaved changes).
+        // Inline so the e2e file has no dependency on src/core/dialog.js — keeps
+        // the e2e runnable in any branch state.
+        await evaluate(`
+          (function() {
+            var patterns = [
+              { match: /Leave current replay\\??/i, button: /^Leave$/i },
+              { match: /You have unsaved changes/i, button: /^(Open anyway|Don'?t save|Discard|Abrir mesmo|Descartar|Não salvar|Abrir de todos|No guardar|Ouvrir quand|Ne pas enregistrer|Abandonner|Trotzdem öffnen|Nicht speichern|Verwerfen)$/i }
+            ];
+            var els = document.querySelectorAll('div, section');
+            for (var i = 0; i < els.length; i++) {
+              var el = els[i];
+              if (el.offsetParent === null) continue;
+              var t = el.textContent || '';
+              if (t.length > 600) continue;
+              for (var p = 0; p < patterns.length; p++) {
+                if (!patterns[p].match.test(t)) continue;
+                var btns = el.querySelectorAll('button');
+                for (var j = 0; j < btns.length; j++) {
+                  var b = btns[j];
+                  if (b.offsetParent === null) continue;
+                  var label = (b.textContent || b.getAttribute('title') || '').trim();
+                  if (patterns[p].button.test(label)) { b.click(); break; }
+                }
+                break;
+              }
+            }
+          })()
+        `);
+      } catch {}
     } catch (err) {
       console.error('Cannot connect to TradingView. Make sure it is running with --remote-debugging-port=9222');
       process.exit(1);
