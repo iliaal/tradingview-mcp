@@ -10,7 +10,7 @@ export async function captureScreenshot({ region, filename, method, output_dir }
   const targetDir = resolveScreenshotDir(output_dir);
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const fname = (filename || `tv_${region || 'full'}_${ts}`).replace(/[\/\\]/g, '_');
+  const fname = (filename || `tv_${region || 'full'}_${ts}`).replace(/[/\\]/g, '_');
   const filePath = join(targetDir, `${fname}.png`);
 
   if (method === 'api') {
