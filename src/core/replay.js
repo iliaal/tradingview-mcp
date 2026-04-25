@@ -1,19 +1,32 @@
 /**
  * Core replay mode logic.
  */
-import { evaluate as _evaluate, getReplayApi as _getReplayApi } from '../connection.js';
+import { evaluate as _evaluate, getReplayApi as _getReplayApi, getReplayUIController as _getReplayUIController, safeString } from '../connection.js';
 import { dismissBlockingDialogs } from './dialog.js';
 
 export const VALID_AUTOPLAY_DELAYS = [100, 143, 200, 300, 1000, 2000, 3000, 5000, 10000];
 
+const REPLAY_RESOLUTION_LABELS = {
+  '1T': '1 tick', '1S': '1 second',
+  '1': '1 min', '3': '3 min', '5': '5 min', '10': '10 min', '15': '15 min', '30': '30 min',
+  '1H': '1 hour', '2H': '2 hours', '3H': '3 hours', '4H': '4 hours',
+  '1D': '1 day', auto: 'auto',
+};
+
 function wv(path) {
   return `(function(){ var v = ${path}; return (v && typeof v === 'object' && typeof v.value === 'function') ? v.value() : v; })()`;
+}
+
+function resolveLabel(current, auto) {
+  if (current === null) return `auto (${REPLAY_RESOLUTION_LABELS[auto] || auto})`;
+  return REPLAY_RESOLUTION_LABELS[current] || current;
 }
 
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
     getReplayApi: deps?.getReplayApi || _getReplayApi,
+    getReplayUIController: deps?.getReplayUIController || _getReplayUIController,
   };
 }
 
@@ -157,6 +170,33 @@ export async function trade({ action, _deps }) {
   const position = await evaluate(wv(`${rp}.position()`));
   const pnl = await evaluate(wv(`${rp}.realizedPL()`));
   return { success: true, action, position, realized_pnl: pnl };
+}
+
+export async function setResolution({ interval, _deps } = {}) {
+  // Resolve "auto" or empty to null (TV's internal representation).
+  const value = (!interval || interval === 'auto') ? null : interval;
+  const { evaluate, getReplayApi, getReplayUIController } = _resolve(_deps);
+  const rp = await getReplayApi();
+  const started = await evaluate(wv(`${rp}.isReplayStarted()`));
+  if (!started) throw new Error('Replay is not started. Use replay_start first.');
+
+  const ctrl = await getReplayUIController();
+
+  // Valid resolutions are dynamic per chart timeframe. Validate BEFORE the
+  // change call to prevent cloud state corruption from invalid values.
+  const available = await evaluate(wv(`${ctrl}._allReplayResolutions.value()`));
+  if (!Array.isArray(available)) {
+    throw new Error('Could not retrieve available replay resolutions from TradingView.');
+  }
+  if (value !== null && !available.includes(value)) {
+    throw new Error(`Invalid replay resolution "${interval}". Available for current timeframe: ${available.join(', ')}, auto. Note: 1T and 1S may require a paid TradingView plan.`);
+  }
+
+  await evaluate(`${ctrl}.changeReplayResolution(${value === null ? 'null' : safeString(value)})`);
+
+  const current = await evaluate(wv(`${ctrl}._currentReplayResolution.value()`));
+  const auto = await evaluate(wv(`${ctrl}._autoReplayResolution.value()`));
+  return { success: true, resolution: current, resolution_label: resolveLabel(current, auto), auto_resolution: auto };
 }
 
 export async function status({ _deps } = {}) {

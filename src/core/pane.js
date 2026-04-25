@@ -134,6 +134,36 @@ export async function focus({ index }) {
 }
 
 /**
+ * Set the timeframe on a specific pane by index without focusing it.
+ * Calls the pane's mainSeries().setResolution(tf) directly via the chart
+ * widget collection. Skips the focus → setResolution → unfocus dance,
+ * useful when prepping a multi-pane grid without disturbing the active
+ * pane's user state.
+ */
+export async function setTimeframe({ index, timeframe }) {
+  const idx = Number(index);
+  const result = await evaluate(`
+    (function() {
+      var cwc = ${CWC};
+      var all = cwc.getAll();
+      if (${idx} >= all.length) return { error: 'Pane index ' + ${idx} + ' out of range (have ' + all.length + ' panes)' };
+      var chart = all[${idx}];
+      try {
+        var mainSeries = chart.model().mainSeries();
+        mainSeries.setResolution(${safeString(timeframe)});
+        return { index: ${idx}, timeframe: ${safeString(timeframe)}, symbol: mainSeries.symbol() };
+      } catch(e) {
+        return { error: 'setResolution failed: ' + e.message };
+      }
+    })()
+  `);
+
+  if (result?.error) throw new Error(result.error);
+  await new Promise(r => setTimeout(r, 300));
+  return { success: true, index: result.index, timeframe: result.timeframe, symbol: result.symbol };
+}
+
+/**
  * Set the symbol on a specific pane by index.
  * Works by focusing the pane, then using the active chart's setSymbol.
  */

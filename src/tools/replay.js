@@ -27,6 +27,13 @@ export function registerReplayTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('replay_set_resolution', 'Set replay update interval (tick granularity). Valid values depend on chart timeframe — e.g. on a 5m chart: "1T" (tick), "1S" (second), "1" (1 min), "5" (5 min). On daily: "1H", "2H", "3H", "4H", "1D". Use "auto" to reset. 1T/1S may require a paid TradingView plan.', {
+    interval: z.string().optional().describe('Update interval (e.g. 1T, 1S, 1, 5, 1H, 1D, auto)'),
+  }, async ({ interval }) => {
+    try { return jsonResult(await core.setResolution({ interval })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('replay_trade', 'Execute a trade action in replay mode (buy, sell, or close position)', {
     action: z.string().describe('Trade action: buy, sell, or close'),
   }, async ({ action }) => {

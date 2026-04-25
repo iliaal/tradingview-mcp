@@ -710,3 +710,303 @@ export async function listScripts() {
     error: scripts?.error,
   };
 }
+
+/**
+ * Switch the Pine editor to a different saved script via the UI dropdown.
+ * Properly switches editor context (unlike pine_open which just sets the
+ * source code). Steps: click nameButton → find target script entry by
+ * textContent in the dropdown → dispatch a real mousePressed/mouseReleased
+ * pair at its coordinates → verify the nameButton now shows the new name.
+ */
+export async function switchScript({ name }) {
+  const editorReady = await ensurePineEditorOpen();
+  if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  const currentBefore = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      return btn ? btn.textContent.trim() : null;
+    })()
+  `);
+  if (currentBefore === name) {
+    return { success: true, requested: name, current: name, shortCircuited: true };
+  }
+
+  const dropdownOpened = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      if (!btn) return false;
+      btn.click();
+      return true;
+    })()
+  `);
+  if (!dropdownOpened) throw new Error('Could not find Pine editor nameButton dropdown');
+
+  await new Promise(r => setTimeout(r, 500));
+
+  const escapedName = JSON.stringify(name);
+  const coords = await evaluate(`
+    (function() {
+      var target = ${escapedName};
+      var allEls = document.querySelectorAll('*');
+      for (var el of allEls) {
+        var t = (el.textContent || '').trim();
+        if (t === target && el.offsetParent !== null && el.offsetHeight > 15 && el.offsetHeight < 40 && el.childElementCount <= 1) {
+          var rect = el.getBoundingClientRect();
+          return { x: Math.round(rect.x + rect.width / 2), y: Math.round(rect.y + rect.height / 2) };
+        }
+      }
+      return null;
+    })()
+  `);
+
+  if (!coords) {
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true}))`);
+    throw new Error('Script "' + name + '" not found in dropdown. Check pine_list_scripts for available names.');
+  }
+
+  const c = await getClient();
+  await c.Input.dispatchMouseEvent({ type: 'mousePressed', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+  await c.Input.dispatchMouseEvent({ type: 'mouseReleased', x: coords.x, y: coords.y, button: 'left', clickCount: 1 });
+
+  await new Promise(r => setTimeout(r, 1000));
+
+  const currentName = await evaluate(`
+    (function() {
+      var btn = document.querySelector('[class*="nameButton"]');
+      return btn ? btn.textContent.trim() : 'unknown';
+    })()
+  `);
+
+  if (currentName !== name) {
+    throw new Error(
+      `switchScript failed: requested "${name}" but nameButton shows "${currentName}". ` +
+      `The dropdown click at (${coords.x}, ${coords.y}) may have missed the target.`
+    );
+  }
+
+  return { success: true, requested: name, current: currentName, coords };
+}
+
+// Open the Pine title-button menu and click an item (with optional submenu).
+// Used by version_history and other menu-driven flows. Real MouseEvents
+// (mousedown+mouseup+click) are required — TV's React tree ignores .click()
+// on these dropdown items in current builds.
+async function _pineMenuAction(label, subLabel) {
+  const result = await evaluateAsync(`
+    (function() {
+      function mc(el) {
+        ['mousedown','mouseup','click'].forEach(function(t) {
+          el.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window }));
+        });
+      }
+      function poll(fn, interval, timeout) {
+        return new Promise(function(resolve, reject) {
+          var elapsed = 0;
+          var t = setInterval(function() {
+            var r = fn();
+            if (r !== null) { clearInterval(t); resolve(r); return; }
+            elapsed += interval;
+            if (elapsed >= timeout) { clearInterval(t); reject(new Error('poll timeout')); }
+          }, interval);
+        });
+      }
+
+      var btn = document.querySelector('[data-qa-id="pine-script-title-button"]');
+      if (!btn) return Promise.resolve({ error: 'title button not found' });
+      btn.click();
+
+      var menuId = btn.getAttribute('aria-controls');
+      return poll(function() {
+        var menu = menuId && document.getElementById(menuId);
+        if (!menu || menu.querySelectorAll('[role="menuitem"]').length === 0) return null;
+        return menu;
+      }, 50, 2000).then(function(menu) {
+        var items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+        var label = ${JSON.stringify(label)};
+        var target = items.find(function(el) {
+          return el.getAttribute('aria-label') === label ||
+                 (label === 'Create new' && el.getAttribute('aria-haspopup') === 'menu' && !el.getAttribute('aria-label'));
+        });
+        if (!target) return { error: 'menu item not found: ' + label, available: items.map(function(el) { return el.getAttribute('aria-label'); }) };
+
+        if (!${JSON.stringify(subLabel || null)}) {
+          mc(target);
+          return { ok: true };
+        }
+
+        target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+        target.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+        var subId = target.getAttribute('aria-controls');
+
+        return poll(function() {
+          var submenu = subId && document.getElementById(subId);
+          if (!submenu || submenu.querySelectorAll('[role="menuitem"]').length === 0) return null;
+          return submenu;
+        }, 50, 1000).then(function(submenu) {
+          var sub = ${JSON.stringify((subLabel || '').toLowerCase())};
+          var subTarget = Array.from(submenu.querySelectorAll('[role="menuitem"]')).find(function(el) {
+            return (el.getAttribute('aria-label') || '').toLowerCase() === sub;
+          });
+          if (!subTarget) return { error: 'submenu item not found: ' + sub };
+          mc(subTarget);
+          return { ok: true };
+        });
+      }).catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+  if (result?.error) throw new Error(result.error);
+}
+
+// Resolve the currently open script's pine-facade {id, name, version}.
+// Reads the editor title button's text, then matches it against the saved
+// scripts list (with fuzzy fallback for truncated names).
+async function _currentScriptInfo() {
+  const result = await evaluateAsync(`
+    (function() {
+      var titleBtn = document.querySelector('[data-qa-id="pine-script-title-button"]');
+      var currentName = titleBtn ? (titleBtn.querySelector('h2') || titleBtn).textContent.trim() : null;
+      return fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
+        .then(function(r) { return r.json(); })
+        .then(function(scripts) {
+          if (!Array.isArray(scripts)) return { error: 'unexpected pine-facade response' };
+          var match = null;
+          var nameLower = (currentName || '').toLowerCase();
+          for (var i = 0; i < scripts.length; i++) {
+            var sn = (scripts[i].scriptName || '').toLowerCase();
+            var st = (scripts[i].scriptTitle || '').toLowerCase();
+            if (sn === nameLower || st === nameLower) { match = scripts[i]; break; }
+          }
+          if (!match) {
+            for (var j = 0; j < scripts.length; j++) {
+              var sn2 = (scripts[j].scriptName || '').toLowerCase();
+              if (sn2.indexOf(nameLower) !== -1 || nameLower.indexOf(sn2) !== -1) { match = scripts[j]; break; }
+            }
+          }
+          if (!match) return { error: 'Could not find current script in pine-facade. Name: ' + currentName };
+          return { id: match.scriptIdPart, name: match.scriptName || match.scriptTitle, version: match.version };
+        })
+        .catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+  if (result?.error) throw new Error(result.error);
+  return result;
+}
+
+/**
+ * Save the current Pine script as a new file via pine-facade REST API,
+ * then reopen the new script so the editor reflects the new identity.
+ * Without the reopen, subsequent pine_save would write back to the
+ * previous script — not the saved-as copy.
+ */
+export async function saveAs({ name }) {
+  const editorReady = await ensurePineEditorOpen();
+  if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  const source = await evaluate(`
+    (function() { var m = ${FIND_MONACO}; return m ? m.editor.getValue() : null; })()
+  `);
+  if (!source) throw new Error('Could not read source from Monaco editor.');
+
+  const copyName = name || 'Copy';
+  const result = await evaluateAsync(`
+    (function() {
+      var fd = new FormData();
+      fd.append('source', ${JSON.stringify(source)});
+      return fetch('https://pine-facade.tradingview.com/pine-facade/save/new?name=' + encodeURIComponent(${JSON.stringify(copyName)}) + '&allow_overwrite=true', {
+        method: 'POST', credentials: 'include', body: fd,
+      })
+        .then(function(r) { return r.json().then(function(d) { return { status: r.status, data: d }; }); })
+        .catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+  if (result?.error) throw new Error(result.error);
+  if (result?.status >= 400) throw new Error('pine-facade save/new failed: ' + JSON.stringify(result.data));
+
+  const d = result?.data || {};
+  const scriptId = d.scriptIdPart || d.id || d.script_id || null;
+
+  try { await openScript({ name: copyName }); } catch (_) {}
+
+  return { success: true, action: 'save_as', name: copyName, script_id: scriptId };
+}
+
+/**
+ * Rename the currently open Pine script via pine-facade REST API.
+ */
+export async function renameScript({ name }) {
+  const editorReady = await ensurePineEditorOpen();
+  if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  const { id, name: oldName } = await _currentScriptInfo();
+  const encoded = encodeURIComponent(id);
+
+  const result = await evaluateAsync(`
+    (function() {
+      return fetch('https://pine-facade.tradingview.com/pine-facade/rename/' + ${JSON.stringify(encoded)} + '?name=' + encodeURIComponent(${JSON.stringify(name)}) + '&force=true', {
+        method: 'POST', credentials: 'include',
+      })
+        .then(function(r) { return { status: r.status, ok: r.ok }; })
+        .catch(function(e) { return { error: e.message }; });
+    })()
+  `);
+  if (result?.error) throw new Error(result.error);
+  if (!result?.ok) throw new Error('pine-facade rename failed with status ' + result?.status);
+
+  return { success: true, action: 'renamed', old_name: oldName, name, script_id: id };
+}
+
+/**
+ * Open TV's "Version history" dialog for the current script.
+ * No way to navigate the history tree programmatically — this just opens
+ * the dialog so the user can pick a revision.
+ */
+export async function versionHistory() {
+  const editorReady = await ensurePineEditorOpen();
+  if (!editorReady) throw new Error('Could not open Pine Editor.');
+
+  await _pineMenuAction('Version history…');
+  await new Promise(r => setTimeout(r, 500));
+
+  return { success: true, action: 'version_history_opened' };
+}
+
+/**
+ * Delete a saved Pine script by name via pine-facade REST API.
+ * The Recently Used dropdown still shows the name until next TV reload.
+ */
+export async function deleteScript({ name }) {
+  const list = await evaluateAsync(`
+    fetch('https://pine-facade.tradingview.com/pine-facade/list/?filter=saved', { credentials: 'include' })
+      .then(function(r) { return r.json(); })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+  if (list?.error) throw new Error('Could not fetch script list: ' + list.error);
+  if (!Array.isArray(list)) throw new Error('Unexpected pine-facade response');
+
+  const target = name.toLowerCase();
+  let match = list.find(s => (s.scriptName || '').toLowerCase() === target || (s.scriptTitle || '').toLowerCase() === target);
+  if (!match) match = list.find(s => (s.scriptName || '').toLowerCase().includes(target) || (s.scriptTitle || '').toLowerCase().includes(target));
+  if (!match) throw new Error(`Script "${name}" not found. Use pine_list_scripts to see available scripts.`);
+
+  const id = match.scriptIdPart;
+  const scriptName = match.scriptName || match.scriptTitle;
+
+  const result = await evaluateAsync(`
+    fetch('https://pine-facade.tradingview.com/pine-facade/delete/' + encodeURIComponent(${JSON.stringify(id)}), {
+      method: 'POST', credentials: 'include',
+    }).then(function(r) { return { status: r.status, ok: r.ok }; })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+
+  if (result?.error) throw new Error('pine-facade delete failed: ' + result.error);
+  if (!result?.ok) throw new Error('pine-facade delete returned status ' + result?.status);
+
+  return {
+    success: true,
+    action: 'deleted',
+    name: scriptName,
+    script_id: id,
+    note: 'Script removed from TV cloud. Recently Used list clears on next TV session reload.',
+  };
+}
