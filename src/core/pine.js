@@ -268,17 +268,55 @@ export async function setSource({ source }) {
   if (!editorReady) throw new Error('Could not open Pine Editor.');
 
   const escaped = JSON.stringify(source);
-  const set = await evaluate(`
+
+  // Monaco setValue() is synchronous and can freeze the renderer on large
+  // scripts, deadlocking the CDP evaluate() round-trip. Run the work via
+  // setTimeout(..., 0) so the eval call returns immediately, then poll a
+  // window-scoped status flag for completion. Use pushEditOperations when
+  // a model is available (better batching, preserves undo stack).
+  const token = `__pineSetSource_${Date.now()}`;
+  await evaluate(`
     (function() {
-      var m = ${FIND_MONACO};
-      if (!m) return false;
-      m.editor.setValue(${escaped});
-      return true;
+      window.${token} = 'pending';
+      setTimeout(function() {
+        try {
+          var m = ${FIND_MONACO};
+          if (!m) { window.${token} = 'no_editor'; return; }
+          var model = m.editor.getModel();
+          if (model) {
+            var fullRange = model.getFullModelRange();
+            model.pushEditOperations([], [{ range: fullRange, text: ${escaped} }], function() { return null; });
+          } else {
+            m.editor.setValue(${escaped});
+          }
+          window.${token} = 'done';
+        } catch(e) { window.${token} = 'error:' + e.message; }
+      }, 0);
     })()
   `);
 
-  if (!set) throw new Error('Monaco found but setValue() failed.');
-  return { success: true, lines_set: source.split('\n').length };
+  const maxWait = 15000;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    await new Promise(r => setTimeout(r, 200));
+    const status = await evaluate(`window.${token}`);
+    if (status === 'done') {
+      await evaluate(`delete window.${token}`);
+      return { success: true, lines_set: source.split('\n').length };
+    }
+    if (status === 'no_editor') {
+      await evaluate(`delete window.${token}`);
+      throw new Error('Monaco editor not found during setValue().');
+    }
+    if (status && status.startsWith('error:')) {
+      const msg = status.slice(6);
+      await evaluate(`delete window.${token}`);
+      throw new Error(`Monaco setValue() failed: ${msg}`);
+    }
+  }
+
+  await evaluate(`delete window.${token}`);
+  throw new Error('Pine Editor setValue() timed out after 15s. The script may be too large or the editor is unresponsive.');
 }
 
 export async function compile() {
