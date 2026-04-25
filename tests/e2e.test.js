@@ -124,18 +124,28 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
       Page = client.Page;
 
       // Reset any lingering state from a previous run before test execution.
-      // Stops replay, returns to realtime, and dismisses any
-      // 'Leave current replay?' / 'Continue your last replay?' / unsaved-changes
-      // dialogs left over from a prior session — without this, every
-      // chart_set_symbol downstream hangs on a blocking modal that has no
-      // role='dialog' marker.
+      // Stops replay, returns to realtime, wipes _replaySessionState, and
+      // dismisses any 'Leave current replay?' / 'Continue your last replay?' /
+      // unsaved-changes dialogs left over from a prior session.
+      // Without this, every chart_set_symbol downstream silently no-ops or
+      // hangs on a blocking modal with no role='dialog' marker.
       try {
         await evaluate(`
           (function() {
             try {
               var api = window.TradingViewApi && window.TradingViewApi._replayApi;
-              if (api && typeof api.stopReplay === 'function') api.stopReplay();
-              if (api && typeof api.goToRealtime === 'function') api.goToRealtime();
+              if (api) {
+                try { api.stopReplay(); } catch(e) {}
+                try { api.goToRealtime(); } catch(e) {}
+              }
+              // Clear saved-replay-state so subsequent setSymbol doesn't pop
+              // 'Leave current replay?' and so a future TV restart doesn't
+              // pop 'Continue your last replay?'. The state is at two paths
+              // (the live collection + the linking namespace).
+              var col = window.TradingViewApi && window.TradingViewApi._chartWidgetCollection;
+              if (col) col._replaySessionState = null;
+              var linking = window.TradingViewApi && window.TradingViewApi.linking;
+              if (linking && linking._chartWidgetCollection) linking._chartWidgetCollection._replaySessionState = null;
             } catch(e) {}
           })()
         `);

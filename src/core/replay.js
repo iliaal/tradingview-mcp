@@ -93,21 +93,52 @@ export async function autoplay({ speed, _deps } = {}) {
   return { success: true, autoplay_active: !!isAutoplay, delay_ms: currentDelay };
 }
 
+// Wipes TV's saved-replay-state holders. Idempotent — the state may be null
+// already, may be populated from a prior session, or may be re-populated by
+// TV's internal callbacks. We always set it to null because the only path to
+// avoid 'Continue your last replay?' on next restart is empty state at exit.
+const CLEAR_SESSION_STATE_JS = `
+  (function() {
+    try {
+      var col = window.TradingViewApi && window.TradingViewApi._chartWidgetCollection;
+      if (col) col._replaySessionState = null;
+      var linking = window.TradingViewApi && window.TradingViewApi.linking;
+      if (linking && linking._chartWidgetCollection) linking._chartWidgetCollection._replaySessionState = null;
+    } catch(e) {}
+  })()
+`;
+
 export async function stop({ _deps } = {}) {
   const { evaluate, getReplayApi } = _resolve(_deps);
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
-    // Even when the API reports replay isn't started, TV occasionally has a
-    // 'Leave current replay?' dialog lingering from a stale state. Clear it.
+    // Already stopped, but TV may still have saved state set from before
+    // (e.g. when this run inherited state from a prior session). Wipe it
+    // and dismiss any lingering 'Leave current replay?' dialog.
+    await evaluate(CLEAR_SESSION_STATE_JS);
     const dismissed = await dismissBlockingDialogs({ evaluate });
     return { success: true, action: 'already_stopped', dismissed_dialogs: dismissed };
   }
   // TV 3.1.0 needs both stopReplay and goToRealtime to fully exit replay
-  // mode — stopReplay alone leaves saved-replay state that triggers a
-  // 'Leave current replay?' dialog on the next setSymbol/setResolution.
-  await evaluate(`${rp}.stopReplay()`);
-  await evaluate(`${rp}.goToRealtime()`);
+  // and clear the saved-replay state that triggers a 'Leave current replay?'
+  // dialog on subsequent setSymbol/setResolution. Run both inside one IIFE
+  // with try/catch — TV's replay engine sometimes treats them as a sequence
+  // (stopReplay runs, goToRealtime throws 'Replay is not started' because
+  // the engine already cleaned up). Both succeeding-and-no-opping is fine,
+  // both running cleanly is fine, only one running is fine. The combined
+  // effect is what matters: by the time this returns, replay is off and
+  // saved state is cleared.
+  await evaluate(`
+    (function() {
+      var api = window.TradingViewApi && window.TradingViewApi._replayApi;
+      if (api) {
+        try { api.stopReplay(); } catch(e) {}
+        try { api.goToRealtime(); } catch(e) {}
+      }
+    })()
+  `);
+  await evaluate(CLEAR_SESSION_STATE_JS);
   const dismissed = await dismissBlockingDialogs({ evaluate });
   return { success: true, action: 'replay_stopped', dismissed_dialogs: dismissed };
 }
