@@ -1366,11 +1366,16 @@ val = array.get(a, 5)`;
 
   describe('Context Size Validation', () => {
 
-    it('quote_get output < 500 bytes', async () => {
+    it('quote_get output < 1KB', async () => {
+      // 1KB threshold (was 500 bytes originally). The bound was bumped after
+      // observing real symbolExt() payloads on equities pull description and
+      // exchange strings that, with bid/ask attached, push a quote past 500
+      // bytes for many symbols. 1024 leaves comfortable headroom over the
+      // ~400-byte typical case without losing the context-cost signal —
+      // anything that doubles past 1KB is a genuine regression worth
+      // catching.
       const r = await coreData.getQuote({});
       const size = JSON.stringify(r, null, 2).length;
-      // The threshold has drifted as TV exposes more fields. Anything under
-      // 1KB is fine for context-cost purposes.
       assert.ok(size < 1024, `quote_get output is ${size} bytes (target < 1024)`);
     });
 
