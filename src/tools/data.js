@@ -87,8 +87,10 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('data_get_study_values', 'Get current indicator values from the data window for all visible studies (RSI, MACD, Bollinger Bands, EMAs, custom indicators with plot()).', {}, async () => {
-    try { return jsonResult(await core.getStudyValues()); }
+  server.tool('data_get_study_values', 'Get current indicator values from the data window for all visible studies (RSI, MACD, Bollinger Bands, EMAs, custom indicators with plot()). Use study_filter to target one indicator by name substring.', {
+    study_filter: z.string().optional().describe('Substring to match study name (e.g., "RSI", "MACD"). Omit for all studies.'),
+  }, async ({ study_filter }) => {
+    try { return jsonResult(await core.getStudyValues({ study_filter })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 }
