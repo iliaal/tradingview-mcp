@@ -22,32 +22,37 @@ import { evaluate as _evaluate } from '../connection.js';
 const DISMISS_PATTERNS = [
   {
     match: /Leave current replay\??/i,
-    // 'Leave' discards the in-progress replay. The other button is 'Stay'
-    // which keeps replay active (and would block whatever triggered the dialog).
     button: /^Leave$/i,
     note: 'leave_replay',
   },
   {
     match: /Continue your last replay\??/i,
-    // This dialog appears at startup or when replay state was saved from a
-    // previous session. Buttons are 'Continue' (resumes saved replay — bad
-    // for automation, puts us back in replay), 'Start new' (starts a new
-    // replay — also bad), and 'close' (the X, dismisses without action).
-    // We click 'close' so TV doesn't auto-resume replay during tests.
     button: /^close$/i,
     note: 'continue_replay',
   },
   {
     match: /You have unsaved changes/i,
-    // Match the proceed/discard side: "Open anyway", "Don't save", "Discard",
-    // and the equivalents in PT/ES/FR/DE (mirrors layout_switch regex).
     button: /^(Open anyway|Don'?t save|Discard|Abrir mesmo|Descartar|Não salvar|Abrir de todos|No guardar|Ouvrir quand|Ne pas enregistrer|Abandonner|Trotzdem öffnen|Nicht speichern|Verwerfen)$/i,
     note: 'unsaved_changes',
+  },
+  {
+    // Pine "Save script" prompt — appears when adding unsaved script to chart.
+    // Matched by exact button trio (Save + Cancel + close) since the dialog's
+    // text bleeds into the surrounding Pine Editor container, making
+    // text-only matching brittle. We click Cancel to discard the save.
+    button_set: ['Save', 'Cancel', 'close'],
+    button: /^Cancel$/i,
+    note: 'save_script',
   },
 ];
 
 const DISMISS_PATTERNS_JSON = JSON.stringify(
-  DISMISS_PATTERNS.map(p => ({ match: p.match.source, button: p.button.source, note: p.note }))
+  DISMISS_PATTERNS.map(p => ({
+    match: p.match ? p.match.source : null,
+    button: p.button.source,
+    button_set: p.button_set || null,
+    note: p.note,
+  }))
 );
 
 /**
@@ -63,28 +68,64 @@ export async function dismissBlockingDialogs({ evaluate = _evaluate } = {}) {
     (function() {
       var patterns = ${DISMISS_PATTERNS_JSON};
       var dismissed = [];
-      // Scan every visible div / section for matching text.
-      // We can't rely on role="dialog" or [class*="dialog"] — TV's replay
-      // dialog is a plain <div> with no semantic markers.
+      var alreadyMatched = {};
+      // Scan every visible div / section. Two pattern types:
+      //   match (regex on textContent, length-bounded for sanity) — used for
+      //     dialogs with a clear short-text body.
+      //   button_set (array of exact button-text strings) — used when the
+      //     dialog's text bleeds into a surrounding container (e.g. Pine
+      //     editor's Save Script prompt). Matches when ALL listed labels
+      //     appear among the element's visible buttons AND the button-set
+      //     count is small enough to be a dialog (< 8 buttons in the
+      //     scope), excluding nested matches.
       var candidates = document.querySelectorAll('div, section');
       for (var i = 0; i < candidates.length; i++) {
         var el = candidates[i];
         if (el.offsetParent === null) continue;
         var text = el.textContent || '';
-        // Skip large containers (top-level layout) — modal text bodies are short.
-        if (text.length > 600) continue;
+
         for (var p = 0; p < patterns.length; p++) {
-          var matchRx = new RegExp(patterns[p].match, 'i');
-          if (!matchRx.test(text)) continue;
-          var btnRx = new RegExp(patterns[p].button, 'i');
-          var btns = el.querySelectorAll('button');
-          for (var j = 0; j < btns.length; j++) {
-            var btn = btns[j];
+          if (alreadyMatched[patterns[p].note]) continue;
+          var pat = patterns[p];
+
+          // Path A: text-regex match (length-bounded)
+          if (pat.match) {
+            if (text.length > 600) continue;
+            var matchRx = new RegExp(pat.match, 'i');
+            if (!matchRx.test(text)) continue;
+          } else if (pat.button_set) {
+            // Path B: button-set fingerprint
+            var visibleBtns = [];
+            var allBtns = el.querySelectorAll('button');
+            for (var b = 0; b < allBtns.length; b++) {
+              if (allBtns[b].offsetParent === null) continue;
+              visibleBtns.push((allBtns[b].textContent || allBtns[b].getAttribute('title') || '').trim());
+            }
+            // All required labels must be present, and the set must be
+            // small (a real dialog has a handful of buttons, not dozens).
+            var hasAll = pat.button_set.every(function(label) {
+              return visibleBtns.indexOf(label) !== -1;
+            });
+            if (!hasAll) continue;
+            // Tighter cap: real Save Script dialog has 3 buttons. Allow
+            // up to len(button_set)+2 to absorb tiny variations (an extra
+            // help/info button) without matching giant editor toolbars.
+            if (visibleBtns.length > pat.button_set.length + 3) continue;
+          } else {
+            continue;
+          }
+
+          // Click the matching button
+          var btnRx = new RegExp(pat.button, 'i');
+          var btns2 = el.querySelectorAll('button');
+          for (var j = 0; j < btns2.length; j++) {
+            var btn = btns2[j];
             if (btn.offsetParent === null) continue;
             var label = (btn.textContent || btn.getAttribute('title') || '').trim();
             if (btnRx.test(label)) {
               btn.click();
-              dismissed.push({ note: patterns[p].note, button: label });
+              dismissed.push({ note: pat.note, button: label });
+              alreadyMatched[pat.note] = true;
               break;
             }
           }
