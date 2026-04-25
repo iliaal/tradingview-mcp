@@ -22,6 +22,12 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import CDP from 'chrome-remote-interface';
+// Wrapper functions — preferred over raw CDP calls. Tests that exercise
+// MCP-tool surfaces should call these so we catch wrapper regressions
+// (which is what the user-facing MCP tools actually do) rather than
+// validating TV's underlying API directly.
+import * as coreUi from '../src/core/ui.js';
+import * as coreReplay from '../src/core/replay.js';
 
 let client;
 let Runtime;
@@ -1130,19 +1136,17 @@ val = array.get(a, 5)`;
     });
 
     it('ui_open_panel — open/close pine-editor', async () => {
-      const bwb = await apiExists(BOTTOM_BAR);
-      assert.ok(bwb, 'bottomWidgetBar exists');
+      // Exercise the actual MCP-tool wrapper, not the raw CDP API. TV 3.1.0
+      // removed bottomWidgetBar.hideWidget so the previous raw-API test was
+      // testing TV, not us — and broke when TV did.
+      const opened = await coreUi.openPanel({ panel: 'pine-editor', action: 'open' });
+      assert.equal(opened.success, true, 'open succeeds');
+      assert.ok(['opened', 'already_open'].includes(opened.performed), `opened.performed=${opened.performed}`);
 
-      // Open
-      await evaluate(`${BOTTOM_BAR}.showWidget('pine-editor')`);
-      await sleep(500);
-      const isOpen = await evaluate(`!!document.querySelector('.monaco-editor.pine-editor-monaco')`);
-
-      // Close
-      await evaluate(`${BOTTOM_BAR}.hideWidget('pine-editor')`);
-      await sleep(300);
-
-      assert.ok(typeof isOpen === 'boolean', 'Panel toggle works');
+      await sleep(800);
+      const closed = await coreUi.openPanel({ panel: 'pine-editor', action: 'close' });
+      assert.equal(closed.success, true, 'close succeeds');
+      assert.ok(['closed', 'already_closed'].includes(closed.performed), `closed.performed=${closed.performed}`);
     });
 
     it('ui_fullscreen — find fullscreen button', async () => {
@@ -1337,16 +1341,11 @@ val = array.get(a, 5)`;
     });
 
     it('replay_stop — return to realtime', async () => {
-      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      if (!started) return;
-
-      await evaluate(`${REPLAY_API}.stopReplay()`);
-      await evaluate(`${REPLAY_API}.goToRealtime()`);
-      await evaluate(`${REPLAY_API}.hideReplayToolbar()`);
-      await sleep(500);
-
-      const stoppedNow = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      assert.ok(!stoppedNow, 'Replay stopped');
+      // Exercise the wrapper. core.replay.stop is the canonical teardown —
+      // it handles the saved-replay-state cleanup that raw stopReplay misses.
+      const result = await coreReplay.stop();
+      assert.equal(result.success, true, 'stop succeeds');
+      assert.ok(['replay_stopped', 'already_stopped'].includes(result.action), `result.action=${result.action}`);
     });
   });
 
