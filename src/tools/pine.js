@@ -79,4 +79,30 @@ export function registerPineTools(server) {
     try { return jsonResult(await core.switchScript({ name })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
+
+  server.tool('pine_save_as', 'Save the current Pine script as a new file (copy). Reopens the new copy so subsequent saves go to it instead of the original.', {
+    name: z.string().describe('Name for the new copy'),
+  }, async ({ name }) => {
+    try { return jsonResult(await core.saveAs({ name })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('pine_rename', 'Rename the currently open Pine script via the pine-facade REST API.', {
+    name: z.string().describe('New name for the script'),
+  }, async ({ name }) => {
+    try { return jsonResult(await core.renameScript({ name })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('pine_version_history', 'Open the Version history dialog for the currently active Pine script.', {}, async () => {
+    try { return jsonResult(await core.versionHistory()); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('pine_delete', 'Delete a saved Pine script by name via pine-facade REST API. The Recently Used list refreshes on next TV reload.', {
+    name: z.string().describe('Name of the script to delete'),
+  }, async ({ name }) => {
+    try { return jsonResult(await core.deleteScript({ name })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
 }
