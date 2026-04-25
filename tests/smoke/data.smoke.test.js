@@ -3,9 +3,9 @@
  * Pure helpers (summarizeBars, processPine*, clampBarCount, etc.) are
  * already unit-tested. These cover the async CDP-dependent exports.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection } from '../helpers/mock-cdp.js';
 import * as data from '../../src/core/data.js';
 
 const SAMPLE_BARS = [
@@ -16,6 +16,7 @@ const SAMPLE_BARS = [
 
 describe('core/data.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_getOhlcv_smoke_default', async () => {
     installCdpMocks({
@@ -184,5 +185,59 @@ describe('core/data.js — smoke', () => {
     const r = await data.getPineBoxes({});
     assert.equal(r.success, true);
     assert.deepEqual(r.studies[0].zones[0], { high: 110, low: 100 });
+  });
+
+  // ── B.12 getPineShapes ──────────────────────────────────────────────
+  it('test_getPineShapes_smoke', async () => {
+    installCdpMocks({
+      evaluate: async () => [{
+        name: 'Buy/Sell signals',
+        shapePlots: [{ plotIndex: 0, dataIndex: 1, id: 'p0', title: 'Long', shape: 'triangleup', location: 'BelowBar', color: '#0f0', size: 'auto' }],
+        signals: [
+          { plot: 'Long', shape: 'triangleup', location: 'BelowBar', color: '#0f0', barIndex: 100, value: 1, ohlc: { time: '2026-01-01T00:00:00Z', timestamp: 1735689600, open: 50, high: 51, low: 49, close: 50.5 } },
+        ],
+        signalCount: 1,
+        barsScanned: 50,
+      }],
+    });
+    const r = await data.getPineShapes({ study_filter: 'signals', last_n_bars: 50 });
+    assert.equal(r.success, true);
+    assert.equal(r.study_count, 1);
+    assert.equal(r.studies[0].name, 'Buy/Sell signals');
+    assert.equal(r.studies[0].signal_count, 1);
+    assert.equal(r.studies[0].signals[0].shape, 'triangleup');
+    assert.equal(r.studies[0].signals[0].ohlc.close, 50.5);
+  });
+
+  it('test_getPineShapes_smoke_empty', async () => {
+    installCdpMocks({ evaluate: async () => [] });
+    const r = await data.getPineShapes({});
+    assert.equal(r.success, true);
+    assert.equal(r.study_count, 0);
+    assert.deepEqual(r.studies, []);
+  });
+
+  it('test_getPineShapes_smoke_caps_last_n_bars', async () => {
+    // last_n_bars > 500 should be capped at 500 in the JS we send to TV.
+    let captured = null;
+    installCdpMocks({
+      evaluate: async (expr) => { captured = expr; return []; },
+    });
+    await data.getPineShapes({ last_n_bars: 9999 });
+    assert.ok(captured.includes('var maxBars = 500;'), 'last_n_bars capped at 500');
+  });
+
+  // ── B.20 study_filter on getStudyValues ──────────────────────────────
+  it('test_getStudyValues_smoke_with_study_filter', async () => {
+    let captured = null;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        captured = expr;
+        return [{ name: 'RSI (14)', values: { 'RSI': 50 } }];
+      },
+    });
+    const r = await data.getStudyValues({ study_filter: 'RSI' });
+    assert.equal(r.success, true);
+    assert.ok(captured.includes('"RSI"'), 'study_filter passed via safeString into evaluate');
   });
 });

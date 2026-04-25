@@ -10,7 +10,7 @@
  *   try { await core.someFn({}); }
  *   finally { resetCdpMocks(); }
  */
-import { __setTestOverrides } from '../../src/connection.js';
+import { __setTestOverrides, disconnect } from '../../src/connection.js';
 
 /**
  * Install mocks. Any key omitted falls through to the real implementation
@@ -23,6 +23,16 @@ export function installCdpMocks(mocks) {
 
 export function resetCdpMocks() {
   __setTestOverrides(null);
+}
+
+/**
+ * Disconnect any real CDP client that may have leaked through an unmocked
+ * function call. Call from a top-level after() hook in each smoke file —
+ * without this, the test process hangs after the suite for ~60s waiting
+ * on an open WebSocket to time out.
+ */
+export async function cleanupConnection() {
+  try { await disconnect(); } catch {}
 }
 
 /**

@@ -2,13 +2,14 @@
  * Smoke tests — src/connection.js CDP path helpers and evaluate/getClient.
  * Uses installCdpMocks so we never touch a real CDP socket.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks, fakeCdpClient } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection, fakeCdpClient } from '../helpers/mock-cdp.js';
 import * as conn from '../../src/connection.js';
 
 describe('connection.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_getClient_smoke', async () => {
     const fake = fakeCdpClient();

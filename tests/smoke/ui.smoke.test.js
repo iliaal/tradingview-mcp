@@ -3,13 +3,14 @@
  * Pure helpers (modifierMask, resolveKey, scrollDelta, findLayoutMatch)
  * are already unit-tested. These cover the CDP-dependent exports.
  */
-import { describe, it, afterEach } from 'node:test';
+import { describe, it, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { installCdpMocks, resetCdpMocks, fakeCdpClient } from '../helpers/mock-cdp.js';
+import { installCdpMocks, resetCdpMocks, cleanupConnection, fakeCdpClient } from '../helpers/mock-cdp.js';
 import * as ui from '../../src/core/ui.js';
 
 describe('core/ui.js — smoke', () => {
   afterEach(() => resetCdpMocks());
+  after(cleanupConnection);
 
   it('test_click_smoke', async () => {
     installCdpMocks({
