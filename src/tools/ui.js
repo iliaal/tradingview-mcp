@@ -1,8 +1,14 @@
 import { z } from 'zod';
 import { jsonResult } from './_format.js';
 import * as core from '../core/ui.js';
+import { dismissBlockingDialogs } from '../core/dialog.js';
 
 export function registerUiTools(server) {
+  server.tool('ui_dismiss_dialogs', 'Detect and dismiss any blocking modal dialogs (e.g. "Leave current replay?", unsaved-changes prompts). Safe to call when no dialog is open — returns an empty list.', {}, async () => {
+    try { return jsonResult({ success: true, dismissed: await dismissBlockingDialogs() }); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('ui_click', 'Click a UI element by aria-label, data-name, text content, or class substring', {
     by: z.enum(['aria-label', 'data-name', 'text', 'class-contains']).describe('Selector strategy'),
     value: z.string().describe('Value to match against the chosen selector strategy'),
