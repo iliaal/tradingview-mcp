@@ -73,4 +73,15 @@ describe('core/capture.js — smoke', () => {
     // Cleanup the dir we created
     try { rmSync(dirname(r.file_path), { recursive: true, force: true }); } catch {}
   });
+
+  // Regression: a relative output_dir with .. segments must not escape the
+  // project root. Earlier code resolved straight through, so an LLM-tool
+  // call could write screenshots anywhere on disk.
+  it('test_captureScreenshot_smoke_output_dir_traversal_rejected', async () => {
+    installCdpMocks({ getClient: async () => fakeCdpClient() });
+    await assert.rejects(
+      captureScreenshot({ filename: 'evil', output_dir: '../../../tmp/escape' }),
+      /escapes the project root/,
+    );
+  });
 });

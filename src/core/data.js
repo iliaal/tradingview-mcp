@@ -8,7 +8,15 @@ const MAX_TRADES = 20;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
 
-function buildGraphicsJS(collectionName, mapKey, filter) {
+// Page-side cap on the number of items returned per study. Labels can have
+// thousands of entries on long Pine scripts; serializing them all over CDP
+// just to drop them server-side wastes time and memory. We keep the LAST N
+// (matching formatPineLabels' slice(-limit) intent) and report the full
+// `count` separately so callers know how much was truncated.
+const DEFAULT_GRAPHICS_ITEM_CAP = 5000;
+
+function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
+  const cap = Math.max(1, Number(maxItems) || DEFAULT_GRAPHICS_ITEM_CAP);
   return `
     (function() {
       var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
@@ -16,6 +24,7 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
       var sources = model.model().dataSources();
       var results = [];
       var filter = ${safeString(filter || '')};
+      var maxItems = ${cap};
       for (var si = 0; si < sources.length; si++) {
         var s = sources[si];
         if (!s.metaInfo) continue;
@@ -28,6 +37,7 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
           if (!g || !g._primitivesCollection) continue;
           var pc = g._primitivesCollection;
           var items = [];
+          var totalCount = 0;
           try {
             var outer = pc.${collectionName};
             if (outer) {
@@ -35,6 +45,7 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
               if (inner) {
                 var coll = inner.get(false);
                 if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
+                  totalCount = coll._primitivesDataById.size;
                   coll._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
                 }
               }
@@ -46,12 +57,14 @@ function buildGraphicsJS(collectionName, mapKey, filter) {
               if (tcOuter) {
                 var tcColl = tcOuter.get('tableCells');
                 if (tcColl && tcColl._primitivesDataById && tcColl._primitivesDataById.size > 0) {
+                  totalCount = tcColl._primitivesDataById.size;
                   tcColl._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
                 }
               }
             } catch(e) {}
           }
-          if (items.length > 0) results.push({name: name, count: items.length, items: items});
+          if (items.length > maxItems) items = items.slice(-maxItems);
+          if (totalCount > 0) results.push({name: name, count: totalCount, items: items, truncated: totalCount > items.length});
         } catch(e) {}
       }
       return results;
@@ -463,10 +476,10 @@ export async function getPineLines({ study_filter, verbose } = {}) {
 
 export async function getPineLabels({ study_filter, max_labels, verbose } = {}) {
   const filter = study_filter || '';
-  const raw = await evaluate(buildGraphicsJS('dwglabels', 'labels', filter));
+  const limit = max_labels || 50;
+  const raw = await evaluate(buildGraphicsJS('dwglabels', 'labels', filter, limit));
   if (!raw || raw.length === 0) return { success: true, study_count: 0, studies: [] };
 
-  const limit = max_labels || 50;
   const studies = raw.map(s => {
     let labels = s.items.map(item => {
       const v = item.raw;
@@ -794,8 +807,10 @@ export async function batchReadPanes({ indices, reads, wait_ms } = {}) {
               var outer = g._primitivesCollection[collectionName];
               if (!outer || typeof outer.get !== 'function') continue;
               var inner = outer.get(mapKey);
-              if (!inner || !inner._primitivesDataById) continue;
-              var map = inner._primitivesDataById;
+              if (!inner || typeof inner.get !== 'function') continue;
+              var coll = inner.get(false);
+              if (!coll || !coll._primitivesDataById) continue;
+              var map = coll._primitivesDataById;
               if (typeof map.forEach !== 'function') continue;
               var items = [];
               map.forEach(function(v, id) { items.push({id: id, raw: v}); });

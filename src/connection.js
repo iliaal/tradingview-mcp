@@ -7,6 +7,8 @@ const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
 const MAX_RETRIES = 5;
 const BASE_DELAY = 500;
 
+export { CDP_HOST, CDP_PORT };
+
 // ── Test-mode overrides ─────────────────────────────────────────────────
 // Unit tests (tests/smoke/*) install mocks via __setTestOverrides so core/*
 // modules don't need a live CDP. Production code never touches this —
