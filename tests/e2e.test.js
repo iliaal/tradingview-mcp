@@ -1219,68 +1219,55 @@ val = array.get(a, 5)`;
     });
 
     it('replay_start — enter replay mode', async () => {
-      const available = await evaluate(wv(`${REPLAY_API}.isReplayAvailable()`));
-      if (!available) return; // Skip if replay not available for current symbol
-
-      await evaluate(`${REPLAY_API}.showReplayToolbar()`);
-      await sleep(500);
-      await evaluate(`${REPLAY_API}.selectFirstAvailableDate()`);
-      await sleep(500);
-
-      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      assert.ok(started, 'Replay started');
+      try {
+        const r = await coreReplay.start({});
+        assert.equal(r.success, true);
+        assert.equal(r.replay_started, true);
+      } catch (err) {
+        // Replay may be unavailable for the current symbol/timeframe.
+        // The wrapper throws a specific message in that case — accept it.
+        assert.ok(/Replay is not available|failed to start/i.test(err.message),
+          `unexpected error: ${err.message}`);
+      }
     });
 
     it('replay_step — advance one bar', async () => {
-      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      if (!started) return; // Skip if replay didn't start
-
-      await evaluate(`${REPLAY_API}.doStep()`);
-      const date = await evaluate(wv(`${REPLAY_API}.currentDate()`));
-      assert.ok(date !== null && date !== undefined, 'Current date returned');
+      // Skip if replay didn't start (e.g., symbol doesn't support replay).
+      const status = await coreReplay.status();
+      if (!status.is_replay_started) return;
+      const r = await coreReplay.step();
+      assert.equal(r.success, true);
+      assert.ok(r.current_date !== null && r.current_date !== undefined, 'Current date returned');
     });
 
     it('replay_autoplay — toggle autoplay', async () => {
-      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      if (!started) return;
-
-      await evaluate(`${REPLAY_API}.toggleAutoplay()`);
-      await sleep(200);
-      const isAutoplay = await evaluate(wv(`${REPLAY_API}.isAutoplayStarted()`));
-      assert.ok(typeof isAutoplay === 'boolean', 'Autoplay state returned');
-
+      const status = await coreReplay.status();
+      if (!status.is_replay_started) return;
+      const r = await coreReplay.autoplay({});
+      assert.equal(r.success, true);
+      assert.ok(typeof r.autoplay_active === 'boolean', 'Autoplay state returned');
       // Stop autoplay if it was turned on
-      if (isAutoplay) {
-        await evaluate(`${REPLAY_API}.toggleAutoplay()`);
-        await sleep(200);
+      if (r.autoplay_active) {
+        await coreReplay.autoplay({}).catch(() => {});
       }
     });
 
     it('replay_trade — buy action', async () => {
-      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
-      if (!started) return;
-
-      await evaluate(`${REPLAY_API}.buy()`);
-      const position = await evaluate(wv(`${REPLAY_API}.position()`));
-      assert.ok(position !== undefined, 'Position returned after buy');
-
+      const status = await coreReplay.status();
+      if (!status.is_replay_started) return;
+      const r = await coreReplay.trade({ action: 'buy' });
+      assert.equal(r.success, true);
+      assert.equal(r.action, 'buy');
+      assert.ok(r.position !== undefined, 'Position returned after buy');
       // Close position
-      try { await evaluate(`${REPLAY_API}.closePosition()`); } catch {}
+      try { await coreReplay.trade({ action: 'close' }); } catch {}
     });
 
     it('replay_status — get replay state', async () => {
-      const status = await evaluate(`
-        (function() {
-          var r = ${REPLAY_API};
-          function unwrap(v) { return (v && typeof v === 'object' && typeof v.value === 'function') ? v.value() : v; }
-          return {
-            is_replay_available: unwrap(r.isReplayAvailable()),
-            is_replay_started: unwrap(r.isReplayStarted()),
-          };
-        })()
-      `);
-      assert.ok(typeof status.is_replay_available === 'boolean', 'Replay availability returned');
-      assert.ok(typeof status.is_replay_started === 'boolean', 'Replay started state returned');
+      const r = await coreReplay.status();
+      assert.equal(r.success, true);
+      assert.ok(typeof r.is_replay_available === 'boolean', 'Replay availability returned');
+      assert.ok(typeof r.is_replay_started === 'boolean', 'Replay started state returned');
     });
 
     it('replay_stop — return to realtime', async () => {
