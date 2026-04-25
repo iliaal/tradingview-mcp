@@ -35,6 +35,7 @@ import * as coreChart from '../src/core/chart.js';
 import * as coreDrawing from '../src/core/drawing.js';
 import * as coreWatchlist from '../src/core/watchlist.js';
 import * as corePine from '../src/core/pine.js';
+import * as coreIndicators from '../src/core/indicators.js';
 import { dismissBlockingDialogs } from '../src/core/dialog.js';
 import { disconnect as disconnectCoreClient } from '../src/connection.js';
 
@@ -459,33 +460,9 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_study_values — indicator values from data window', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s.metaInfo) continue;
-            try {
-              var dwv = s.dataWindowView();
-              if (!dwv) continue;
-              var items = dwv.items();
-              if (!items) continue;
-              var vals = {};
-              for (var j = 0; j < items.length; j++) {
-                if (items[j]._value && items[j]._value !== '∅' && items[j]._title) {
-                  vals[items[j]._title] = items[j]._value;
-                }
-              }
-              if (Object.keys(vals).length > 0) {
-                results.push({ name: s.metaInfo().description, values: vals });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      assert.ok(Array.isArray(data), 'Returns array');
+      const r = await coreData.getStudyValues();
+      assert.equal(r.success, true);
+      assert.ok(Array.isArray(r.studies), 'Returns studies array');
       // May be empty if no indicators on chart — that's OK
     });
 
@@ -540,34 +517,11 @@ describe('TradingView MCP — Full E2E (70 tools)', () => {
     });
 
     it('data_get_pine_boxes — price zone boundaries', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var coll = s._graphics._primitivesCollection.dwgboxes.get('boxes').get(false);
-              if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
-                var zones = [];
-                coll._primitivesDataById.forEach(function(v) {
-                  if (v.y1 != null && v.y2 != null) {
-                    zones.push({ high: Math.max(v.y1, v.y2), low: Math.min(v.y1, v.y2) });
-                  }
-                });
-                var name = '';
-                try { name = s.metaInfo().description; } catch(e) {}
-                results.push({ name: name, zones: zones });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      assert.ok(Array.isArray(data), 'Returns array');
-      if (data.length > 0) {
-        assert.ok(Array.isArray(data[0].zones), 'Has zones array');
+      const r = await coreData.getPineBoxes({});
+      assert.equal(r.success, true);
+      assert.ok(Array.isArray(r.studies), 'Returns studies array');
+      if (r.studies.length > 0) {
+        assert.ok(Array.isArray(r.studies[0].zones), 'Has zones array');
       }
     });
 
@@ -1323,45 +1277,35 @@ val = array.get(a, 5)`;
   describe('Indicators', () => {
 
     it('indicator_toggle_visibility — show/hide study', async () => {
-      // chart_get_state surfaces studies — same path the indicator wrapper uses.
       const state = await coreChart.getState();
       const studies = state.studies || [];
       if (studies.length === 0) return;
-
       const id = studies[0].id;
-      const result = await evaluate(`
-        (function() {
-          var study = ${CHART_API}.getStudyById('${id}');
-          if (!study) return { error: 'not found' };
-          var was = study.isVisible();
-          study.setVisible(!was);
-          var now = study.isVisible();
-          study.setVisible(was); // restore
-          return { was: was, toggled: now, restored: study.isVisible() };
-        })()
-      `);
-      if (!result.error) {
-        assert.notEqual(result.was, result.toggled, 'Visibility toggled');
-        assert.equal(result.was, result.restored, 'Visibility restored');
-      }
+
+      // Read current state via the data wrapper, toggle via the indicator
+      // wrapper, verify the toggle landed, then restore.
+      const before = await coreData.getIndicator({ entity_id: id });
+      const wasVisible = before.visible !== false;
+
+      const toggled = await coreIndicators.toggleVisibility({ entity_id: id, visible: !wasVisible });
+      assert.equal(toggled.success, true);
+      assert.equal(toggled.visible, !wasVisible, 'Visibility flipped');
+
+      // Restore original state.
+      const restored = await coreIndicators.toggleVisibility({ entity_id: id, visible: wasVisible });
+      assert.equal(restored.visible, wasVisible, 'Visibility restored');
     });
 
-    it('indicator_set_inputs — change study parameters', async () => {
+    it('indicator_set_inputs — read existing inputs via data wrapper', async () => {
       const state = await coreChart.getState();
       const studies = state.studies || [];
       if (studies.length === 0) return;
-
       const id = studies[0].id;
-      const result = await evaluate(`
-        (function() {
-          var study = ${CHART_API}.getStudyById('${id}');
-          if (!study) return { error: 'not found' };
-          var inputs = study.getInputValues();
-          return { input_count: inputs.length, first_input: inputs[0] || null };
-        })()
-      `);
-      assert.ok(result, 'Input values retrieved');
-      assert.ok(typeof result.input_count === 'number', 'Has input count');
+
+      const r = await coreData.getIndicator({ entity_id: id });
+      assert.equal(r.success, true);
+      assert.equal(r.entity_id, id);
+      assert.ok(Array.isArray(r.inputs), 'Has inputs array');
     });
   });
 
@@ -1430,91 +1374,29 @@ val = array.get(a, 5)`;
       assert.ok(size < 1024, `quote_get output is ${size} bytes (target < 1024)`);
     });
 
+    // The size-budget tests below validate that the wrapper's compaction
+    // logic produces output within reasonable limits for real chart state.
+    // Earlier these tests re-implemented the wrapper's IIFE inline, which
+    // meant a wrapper bug (e.g. missing inner.get(false)) propagated into
+    // the test and silently passed. Calling the wrapper itself ties the
+    // budget assertion to what users actually receive.
     it('data_get_study_values output < 2KB', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s.metaInfo) continue;
-            try {
-              var dwv = s.dataWindowView();
-              if (!dwv) continue;
-              var items = dwv.items();
-              if (!items) continue;
-              var vals = {};
-              for (var j = 0; j < items.length; j++) {
-                if (items[j]._value && items[j]._value !== '∅' && items[j]._title) {
-                  vals[items[j]._title] = items[j]._value;
-                }
-              }
-              if (Object.keys(vals).length > 0) {
-                results.push({ name: s.metaInfo().description, values: vals });
-              }
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      const size = JSON.stringify({ success: true, studies: data }, null, 2).length;
-      assert.ok(size < 2048, `data_get_study_values output is ${size} bytes (< 2KB)`);
+      const r = await coreData.getStudyValues();
+      const size = JSON.stringify(r, null, 2).length;
+      assert.ok(size < 2048, `getStudyValues output is ${size} bytes (< 2KB)`);
     });
 
     it('pine lines compact < 4KB per study', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var name = s.metaInfo().description || '';
-              var coll = s._graphics._primitivesCollection.dwglines.get('lines').get(false);
-              if (!coll || !coll._primitivesDataById || coll._primitivesDataById.size === 0) continue;
-              var seen = {}, prices = [];
-              coll._primitivesDataById.forEach(function(v) {
-                var y = v.y1 != null && v.y1 === v.y2 ? Math.round(v.y1 * 100) / 100 : null;
-                if (y != null && !seen[y]) { prices.push(y); seen[y] = true; }
-              });
-              prices.sort(function(a,b) { return b - a; });
-              results.push({ name: name, horizontal_levels: prices });
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      for (const study of data) {
+      const r = await coreData.getPineLines({});
+      for (const study of r.studies || []) {
         const size = JSON.stringify(study).length;
         assert.ok(size < 4096, `${study.name}: pine lines ${size} bytes (< 4KB)`);
       }
     });
 
     it('pine labels compact < 8KB per study', async () => {
-      const data = await evaluate(`
-        (function() {
-          var sources = ${CHART_API}._chartWidget.model().model().dataSources();
-          var results = [];
-          for (var i = 0; i < sources.length; i++) {
-            var s = sources[i];
-            if (!s._graphics || !s._graphics._primitivesCollection) continue;
-            try {
-              var name = s.metaInfo().description || '';
-              var coll = s._graphics._primitivesCollection.dwglabels.get('labels').get(false);
-              if (!coll || !coll._primitivesDataById || coll._primitivesDataById.size === 0) continue;
-              var labels = [];
-              coll._primitivesDataById.forEach(function(v) {
-                if (v.t || v.y != null) labels.push({ text: v.t || '', price: v.y != null ? Math.round(v.y * 100) / 100 : null });
-              });
-              if (labels.length > 50) labels = labels.slice(-50);
-              results.push({ name: name, labels: labels });
-            } catch(e) {}
-          }
-          return results;
-        })()
-      `);
-      for (const study of data) {
+      const r = await coreData.getPineLabels({});
+      for (const study of r.studies || []) {
         const size = JSON.stringify(study).length;
         assert.ok(size < 8192, `${study.name}: pine labels ${size} bytes (< 8KB)`);
       }
