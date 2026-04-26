@@ -23,7 +23,7 @@ Personal AI assistant for your TradingView Desktop charts. Connects Claude Code 
 
 ## How It Works (and why it's safe to run)
 
-This tool does not connect to TradingView's servers, modify any TradingView files, or intercept any network traffic. It communicates exclusively with your locally running TradingView Desktop instance via Chrome DevTools Protocol (CDP) — a standard debugging interface built into all Chromium/Electron applications by Google, including VS Code, Slack, and Discord.
+This tool does not connect to TradingView's servers, modify any TradingView files, or intercept any network traffic. It communicates exclusively with your locally running TradingView Desktop instance via Chrome DevTools Protocol (CDP), a standard debugging interface built into all Chromium/Electron applications by Google, including VS Code, Slack, and Discord.
 
 The debug port is disabled by default and must be explicitly enabled by you using a standard Chromium flag (`--remote-debugging-port=9222`). Nothing happens without that deliberate step.
 
@@ -63,17 +63,17 @@ See [RESEARCH.md](RESEARCH.md) for open questions, findings, and related work.
 
 Gives your AI assistant eyes and hands on your own chart:
 
-- **Pine Script development** — write, inject, compile, debug, and iterate on scripts with AI assistance
-- **Chart navigation** — change symbols, timeframes, zoom to dates, add/remove indicators
-- **Visual analysis** — read your chart's indicator values, price levels, and annotations
-- **Draw on charts** — trend lines, horizontal lines, rectangles, text annotations
-- **Manage alerts** — create, list, and delete price alerts
-- **Replay practice** — step through historical bars, practice entries/exits
-- **Screenshots** — capture chart state for AI visual analysis
-- **Multi-pane layouts** — set up 2x2, 3x1, etc. grids with different symbols per pane
-- **Monitor your chart** — stream JSONL from your locally running chart for local monitoring scripts
-- **CLI access** — every MCP tool is also a `tv` CLI command, pipe-friendly with JSON output
-- **Launch TradingView** — auto-detect and launch with debug mode from any platform
+- **Pine Script development**: write, inject, compile, debug, and iterate on scripts with AI assistance
+- **Chart navigation**: change symbols, timeframes, zoom to dates, add/remove indicators
+- **Visual analysis**: read your chart's indicator values, price levels, and annotations
+- **Draw on charts**: trend lines, horizontal lines, rectangles, text annotations
+- **Manage alerts**: create, list, and delete price alerts
+- **Replay practice**: step through historical bars, practice entries/exits
+- **Screenshots**: capture chart state for AI visual analysis
+- **Multi-pane layouts**: set up 2x2, 3x1, etc. grids with different symbols per pane
+- **Monitor your chart**: stream JSONL from your locally running chart for local monitoring scripts
+- **CLI access**: every MCP tool is also a `tv` CLI command, pipe-friendly with JSON output
+- **Launch TradingView**: auto-detect and launch with debug mode from any platform
 
 ## 🚀 Install with Claude Code
 
@@ -228,7 +228,7 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 
 | Tool | When to use | Output size |
 |------|------------|-------------|
-| `chart_get_state` | First call — get symbol, timeframe, all indicator names + IDs | ~500B |
+| `chart_get_state` | First call: get symbol, timeframe, all indicator names + IDs | ~500B |
 | `data_get_study_values` | Read current RSI, MACD, BB, EMA values from all indicators | ~500B |
 | `quote_get` | Get latest price, OHLC, volume | ~200B |
 | `data_get_ohlcv` | Get price bars. **Use `summary: true`** for compact stats | 500B (summary) / 8KB (100 bars) |
@@ -439,8 +439,8 @@ Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  Tradin
 ## Attributions
 
 This project is not affiliated with, endorsed by, or associated with:
-- **TradingView Inc.** — TradingView is a trademark of TradingView Inc.
-- **Anthropic** — Claude and Claude Code are trademarks of Anthropic, PBC.
+- **TradingView Inc.**: TradingView is a trademark of TradingView Inc.
+- **Anthropic**: Claude and Claude Code are trademarks of Anthropic, PBC.
 
 This tool is an independent MCP server that connects to Claude Code via the standard MCP protocol. It does not contain or modify any Anthropic software.
 
@@ -469,7 +469,7 @@ By using this software, you acknowledge and agree that:
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE) for details.
 
 The MIT license applies to the source code of this project only. It does not grant any rights to TradingView's software, data, trademarks, or intellectual property.
 
