@@ -222,7 +222,7 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | "Draw a level at 24500" | `draw_shape` (horizontal_line) |
 | "Take a screenshot" | `capture_screenshot` |
 
-## Tool Reference (93 MCP tools)
+## Tool Reference (95 MCP tools)
 
 ### Chart Reading
 
@@ -230,6 +230,8 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 |------|------------|-------------|
 | `chart_get_state` | First call: get symbol, timeframe, all indicator names + IDs | ~500B |
 | `data_get_study_values` | Read current RSI, MACD, BB, EMA values from all indicators | ~500B |
+| `data_get_multi_timeframe` | Iterate a list of timeframes and read indicator values + price summary on each (top-down analysis) | ~1-2KB |
+| `data_detect_candlestick_patterns` | Native scan over OHLC for 17 classic patterns (doji, hammer, engulfing, stars, soldiers/crows) | ~1-3KB |
 | `quote_get` | Get latest price, OHLC, volume | ~200B |
 | `data_get_ohlcv` | Get price bars. **Use `summary: true`** for compact stats | 500B (summary) / 8KB (100 bars) |
 | `depth_get` | DOM / order book bid/ask levels (panel must be open) | ~1KB |
@@ -431,7 +433,7 @@ npm test
 Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  TradingView Desktop (Electron)
 ```
 
-- **Transport**: MCP over stdio (93 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
+- **Transport**: MCP over stdio (95 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
 - **Connection**: Chrome DevTools Protocol on localhost:9222
 - **Streaming**: Poll-and-diff loop with deduplication, JSONL output to stdout
 - **No dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface`

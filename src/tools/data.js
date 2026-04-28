@@ -93,4 +93,22 @@ export function registerDataTools(server) {
     try { return jsonResult(await core.getStudyValues({ study_filter })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
+
+  server.tool('data_get_multi_timeframe', 'Read indicator values + price summary across multiple timeframes in a single call. Saves current timeframe, iterates the list, restores original. Useful for top-down analysis (W→D→4H→1H→15m alignment). Requires the same indicators to be loaded on the chart.', {
+    timeframes: z.union([z.array(z.string()), z.string()]).describe('Array or comma-separated list of timeframes (e.g., ["W","D","240","60","15"] or "D,60,15"). Max 10.'),
+    study_filter: z.string().optional().describe('Substring to match study name (e.g., "RSI"). Omit for all studies.'),
+    include_ohlcv: z.coerce.boolean().optional().describe('Include compact price summary per timeframe (default true)'),
+  }, async ({ timeframes, study_filter, include_ohlcv }) => {
+    try { return jsonResult(await core.getMultiTimeframe({ timeframes, study_filter, include_ohlcv })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
+  server.tool('data_detect_candlestick_patterns', 'Detect classic candlestick patterns (doji, hammer, engulfing, morning/evening star, three white soldiers, etc.) over recent bars on the current chart. Native scan over OHLC — no chart pollution, no Pine indicator required. 17 patterns supported.', {
+    last_n_bars: z.coerce.number().optional().describe('How many recent bars to scan (default 100, min 3, max 500)'),
+    min_strength: z.coerce.number().optional().describe('Filter by minimum pattern strength 0..1 (default 0 = include all)'),
+    pattern_filter: z.union([z.array(z.string()), z.string()]).optional().describe('Restrict to specific patterns by substring (e.g., ["engulfing","hammer"] or "star,doji"). Omit for all.'),
+  }, async ({ last_n_bars, min_strength, pattern_filter }) => {
+    try { return jsonResult(await core.detectCandlestickPatterns({ last_n_bars, min_strength, pattern_filter })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
 }

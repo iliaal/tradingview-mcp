@@ -2,6 +2,8 @@
  * Core data access logic.
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, KNOWN_PATHS, safeString } from '../connection.js';
+import { setTimeframe as _setTimeframe } from './chart.js';
+import { detectPatternsInBars, KNOWN_PATTERNS } from './patterns.js';
 
 function _resolve(deps) {
   return {
@@ -1018,5 +1020,121 @@ export async function batchReadPanes({ indices, reads, wait_ms, _deps } = {}) {
     pane_count: rawResult.pane_count,
     requested: panes.length,
     panes,
+  };
+}
+
+const MAX_TIMEFRAMES_PER_CALL = 10;
+
+/**
+ * Read indicator values + price summary across multiple timeframes in one call.
+ * Saves the original timeframe, loops through the requested set reusing the
+ * standard setTimeframe / waitForStudiesReady / getStudyValues / getOhlcv
+ * primitives, and restores the original timeframe in finally{}.
+ */
+export async function getMultiTimeframe({ timeframes, study_filter, include_ohlcv, _deps } = {}) {
+  const tfs = Array.isArray(timeframes)
+    ? timeframes.map(t => String(t).trim()).filter(Boolean)
+    : String(timeframes || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (tfs.length === 0) {
+    throw new Error('timeframes is required (array or comma-separated string, e.g. ["W","D","60","15"])');
+  }
+  if (tfs.length > MAX_TIMEFRAMES_PER_CALL) {
+    throw new Error(`Maximum ${MAX_TIMEFRAMES_PER_CALL} timeframes per call to keep output bounded`);
+  }
+
+  const { evaluate } = _resolve(_deps);
+  const includeOhlcv = include_ohlcv !== false;
+
+  let originalTf = null;
+  try { originalTf = await evaluate(`${CHART_API}.resolution()`); } catch {}
+
+  const results = {};
+  const errors = {};
+
+  try {
+    for (const tf of tfs) {
+      try {
+        await _setTimeframe({ timeframe: tf, _deps });
+        const studyValues = await getStudyValues({ study_filter, _deps });
+        const entry = {
+          timeframe: tf,
+          study_count: studyValues.study_count,
+          studies: studyValues.studies,
+        };
+        if (includeOhlcv) {
+          try {
+            const ohlcv = await getOhlcv({ summary: true, _deps });
+            entry.price = {
+              open: ohlcv.open,
+              close: ohlcv.close,
+              high: ohlcv.high,
+              low: ohlcv.low,
+              range: ohlcv.range,
+              change: ohlcv.change,
+              change_pct: ohlcv.change_pct,
+              avg_volume: ohlcv.avg_volume,
+              bar_count: ohlcv.bar_count,
+            };
+          } catch (err) {
+            entry.price_error = err.message;
+          }
+        }
+        results[tf] = entry;
+      } catch (err) {
+        errors[tf] = err.message;
+      }
+    }
+  } finally {
+    if (originalTf && tfs[tfs.length - 1] !== originalTf) {
+      try { await _setTimeframe({ timeframe: originalTf, _deps }); } catch {}
+    }
+  }
+
+  return {
+    success: true,
+    original_timeframe: originalTf,
+    timeframes: tfs,
+    include_ohlcv: includeOhlcv,
+    results,
+    ...(Object.keys(errors).length ? { errors } : {}),
+  };
+}
+
+const MAX_PATTERN_BARS = 500;
+
+/**
+ * Native candlestick pattern detection over the chart's OHLC bars.
+ * No CDP-side pattern logic, no chart pollution: pulls bars via getOhlcv
+ * and runs deterministic pure detectors from patterns.js.
+ */
+export async function detectCandlestickPatterns({
+  last_n_bars,
+  min_strength,
+  pattern_filter,
+  _deps,
+} = {}) {
+  const requested = Math.max(3, Math.min(Number(last_n_bars) || 100, MAX_PATTERN_BARS));
+  const minStrength = Math.max(0, Math.min(Number(min_strength) || 0, 1));
+
+  const ohlcv = await getOhlcv({ count: requested, summary: false, _deps });
+  const bars = ohlcv?.bars || [];
+  if (bars.length === 0) {
+    return { success: true, bar_count: 0, hits: [], known_patterns: KNOWN_PATTERNS };
+  }
+
+  const hits = detectPatternsInBars(bars, {
+    minStrength,
+    patternFilter: pattern_filter || null,
+  });
+  hits.sort((a, b) => b.time - a.time);
+
+  return {
+    success: true,
+    bar_count: bars.length,
+    period: { from: bars[0].time, to: bars[bars.length - 1].time },
+    min_strength: minStrength,
+    hit_count: hits.length,
+    hits,
+    known_patterns: KNOWN_PATTERNS,
   };
 }

@@ -84,5 +84,34 @@ register('data', {
         return core.getIndicator({ entity_id: positionals[0] });
       },
     }],
+    ['mtf', {
+      description: 'Read indicator values + price summary across multiple timeframes',
+      options: {
+        timeframes: { type: 'string', short: 't', description: 'Comma-separated timeframes (e.g., "W,D,60,15"). Required.' },
+        filter: { type: 'string', short: 'f', description: 'Filter by study name substring' },
+        'no-ohlcv': { type: 'boolean', description: 'Skip price summary' },
+      },
+      handler: (opts) => {
+        if (!opts.timeframes) throw new Error('--timeframes required. Example: tv data mtf -t "W,D,60,15"');
+        return core.getMultiTimeframe({
+          timeframes: opts.timeframes,
+          study_filter: opts.filter,
+          include_ohlcv: !opts['no-ohlcv'],
+        });
+      },
+    }],
+    ['patterns', {
+      description: 'Detect classic candlestick patterns over recent OHLC bars',
+      options: {
+        bars: { type: 'string', short: 'n', description: 'Number of recent bars to scan (default 100, max 500)' },
+        'min-strength': { type: 'string', description: 'Filter by minimum pattern strength 0..1' },
+        filter: { type: 'string', short: 'f', description: 'Substring filter (e.g., "engulfing,hammer")' },
+      },
+      handler: (opts) => core.detectCandlestickPatterns({
+        last_n_bars: opts.bars ? Number(opts.bars) : undefined,
+        min_strength: opts['min-strength'] ? Number(opts['min-strength']) : undefined,
+        pattern_filter: opts.filter,
+      }),
+    }],
   ]),
 });
