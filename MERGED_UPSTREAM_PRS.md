@@ -8,6 +8,7 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 | #39 | fix: default screenshot region to 'full' when unspecified | 2026-04-25 | Already in our fork pre-phase-A |
 | #40 | fix: reconnect CDP client after tab switch | 2026-04-25 | Already in our fork pre-phase-A |
 | #43 | feat: output_dir parameter on screenshot tools | 2026-04-25 | Phase B.14 |
+| #45 | Init ESLint and debugging capabilities | 2026-04-25 | Phase N.39 — ESLint config + CI workflow (commit c395533) |
 | #51 | feat: 3-phase strategy detection with DOM fallback | — | **DEFERRED** — conflicts with PR #90 in data.js |
 | #54 | security: remove ui_evaluate tool | 2026-04-25 | Phase N.35 |
 | #60 | feat: draw_position tool for Long/Short positions | 2026-04-25 | Phase B.13 |
@@ -25,6 +26,7 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 | #95 | fix(pine): match Add/Update-on-chart buttons by title attr | 2026-04-25 | Phase A.2 |
 | #96 | fix(data): DOM-scrape fallback for strategy results + trades | — | **DEFERRED** — conflicts with PR #90 in data.js |
 | #97 | fix(pine): resilient Pine Editor detection during state transitions | 2026-04-25 | Phase A.8 |
+| #102 | CI and agent guardrails | 2026-04-25 | Phase N.40 partial — CI workflow ported (commit c395533); agent-guardrail bits not applicable |
 
 ## Untouched / not-applicable upstream PRs
 
@@ -32,7 +34,6 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 |----|-------|--------|
 | #18 | Fix tv_launch for TV v2.14.0+ | Superseded by #80 |
 | #34 | rename draw_shape, expand to 80+ tools | Large breaking API change |
-| #45 | Init ESLint and debugging capabilities | Phase N.39 — pending |
 | #50 | Korean locale Pine compile buttons | Superseded by #95 (title-attr matches all locales) |
 | #52, #73, #76, #79, #93, #100 | Windows MSIX detection variants | Superseded by our own MSIX detection (Phase C.27) |
 | #53 | Docker support | Out of scope |
@@ -41,4 +42,3 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 | #74 | 12hr watchlist scanner workflow | Out of scope |
 | #86 | Frankie candles pine scripts | Out of scope |
 | #98 | Crypto swing-trading rules config | Out of scope |
-| #102 | CI and agent guardrails | Phase N.40 — pending |
