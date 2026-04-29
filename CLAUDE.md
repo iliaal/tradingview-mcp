@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-95 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+96 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -66,6 +66,9 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 ### "Screen multiple symbols"
 - `batch_run` with `symbols: ["ES1!", "NQ1!", "YM1!"]` and `action: "screenshot"` or `"get_ohlcv"`
 
+### "Find today's market movers"
+- `hotlist_get` with `slug: "volume_gainers"` (or `percent_change_gainers`, `percent_change_losers`, `gap_gainers`, `gap_losers`, `percent_range_gainers`, `percent_range_losers`, `percent_gap_gainers`, `percent_gap_losers`) → calls TradingView's public scanner preset endpoint, returns up to 20 US symbols ranked by the hotlist field. Pairs naturally with `watchlist_add_bulk`.
+
 ### "Draw on the chart"
 - `draw_shape` → horizontal_line, trend_line, rectangle, text (pass point + optional point2)
 - `draw_list` → see what's drawn
@@ -114,6 +117,7 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | `data_get_ohlcv` (100 bars) | ~8 KB |
 | `data_detect_candlestick_patterns` (100 bars) | ~1-3 KB (only matched bars) |
 | `data_get_multi_timeframe` (5 TFs × 5 indicators) | ~1-2 KB |
+| `hotlist_get` (20 symbols) | ~1-2 KB |
 | `capture_screenshot` | ~300 bytes (returns file path, not image data) |
 
 ## Tool Conventions

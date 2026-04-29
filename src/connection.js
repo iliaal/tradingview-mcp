@@ -53,6 +53,17 @@ export function safeString(str) {
 }
 
 /**
+ * Escape a string for safe interpolation inside a JavaScript backtick template
+ * body. Defends against `${...}` interpolation, backtick-termination, and
+ * trailing backslashes that would escape the closing backtick. For full string
+ * literals (with quotes), use safeString. For values pasted into a `...` body
+ * to be evaluated remotely, use this.
+ */
+export function safeBacktickBody(str) {
+  return String(str).replace(/[`\\$]/g, (c) => '\\' + c);
+}
+
+/**
  * Validate that a value is a finite number. Throws if NaN, Infinity, or non-numeric.
  * Prevents corrupt values from reaching TradingView APIs that persist to cloud state.
  */
