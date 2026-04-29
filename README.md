@@ -1,7 +1,7 @@
 # TradingView MCP Bridge
 
 [![CI](https://github.com/iliaal/tradingview-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/iliaal/tradingview-mcp/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/iliaal/tradingview-mcp)](https://github.com/iliaal/tradingview-mcp/releases)
+[![Version](https://img.shields.io/github/v/release/iliaal/tradingview-mcp?v=1.0.0)](https://github.com/iliaal/tradingview-mcp/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js 18+](https://img.shields.io/badge/node-18%2B-green?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Platform: macOS · Windows · Linux](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-lightgrey)](#prerequisites)
