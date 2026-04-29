@@ -7,40 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- `hotlist_get` MCP tool + `tv hotlist <slug>` CLI: fetch a TradingView
-  US hotlist (volume_gainers, percent_change_gainers/losers,
-  gap_gainers/losers, etc.) via the public scanner preset endpoint.
-  No auth required, up to 20 symbols per call. Pairs with
-  `watchlist_add_bulk` for refreshing watchlists with market movers.
-  Ported from `lnv-louis/tradingview-mcp`.
-- `src/core/scanner.js`: exchange→country mapping table for
-  TradingView's region-partitioned scanner endpoints (america, uk,
-  germany, japan, forex, crypto, etc.). Reusable primitive for
-  future scanner-backed tools.
-- `safeBacktickBody` helper in `src/connection.js` for escaping
-  values pasted into backtick-template bodies evaluated remotely.
-
-### Changed
-
-- `scripts/pine_push.js` reliability fixes ported from
-  `prezis/tradingview-mcp`: optional CLI arg for source path;
-  pre-push cleanup that removes existing chart instances of the
-  indicator before pushing (prevents max-5 limit on repeat pushes);
-  skip Ctrl+Enter when the button matcher already triggered
-  Add/Update (avoids double-add); longer waits (2400ms dialog,
-  6600ms compile) for heavy indicators.
-
 ## [1.0.0] - 2026-04-29
 
 First tagged release. Forked from `tradesdontlie/tradingview-mcp` at
 `4795784`; the entries below describe the delta since fork. Total
-surface: 95 MCP tools + a `tv` CLI mirroring most of them, all driving
+surface: 96 MCP tools + a `tv` CLI mirroring most of them, all driving
 TradingView Desktop via the Chrome DevTools Protocol on port 9222.
 
 ### Added
 
+- **`hotlist_get`** MCP tool + `tv hotlist <slug>` CLI: fetch a
+  TradingView US hotlist (volume_gainers,
+  percent_change_gainers/losers, gap_gainers/losers, etc.) via the
+  public scanner preset endpoint. No auth required, up to 20 symbols
+  per call. Pairs with `watchlist_add_bulk` for refreshing watchlists
+  with market movers. Ported from `lnv-louis/tradingview-mcp`.
+  `src/core/scanner.js` ships an exchange→country mapping table
+  reusable for future scanner-backed tools, and `safeBacktickBody`
+  was added to `src/connection.js` for escaping values pasted into
+  backtick-template bodies evaluated remotely.
 - **Multi-timeframe + candlestick pattern tools.**
   `data_get_multi_timeframe` reads indicator values + price summary
   across a list of timeframes in one call (W→D→4H→1H→15m alignment),
@@ -114,9 +99,17 @@ TradingView Desktop via the Chrome DevTools Protocol on port 9222.
   with a `summary` mode, pine readers deduplicate and cap labels at
   50 (override via `max_labels`), `study_filter` available everywhere
   it makes sense.
-- **README** restructured: hero image, badges, decision-tree-driven
-  tool reference (95 tools), output size table, footer CTA. Voice
-  rules applied (em dashes scrubbed).
+- **README** restructured: hero image, CI status + Version badges,
+  decision-tree-driven tool reference (96 tools), output size table,
+  footer CTA. Voice rules applied (em dashes scrubbed).
+- **`scripts/pine_push.js` reliability** lessons ported from
+  `prezis/tradingview-mcp`: optional CLI arg for source path;
+  pre-push cleanup that removes existing chart instances of the
+  indicator before pushing (prevents max-5 limit on repeat pushes);
+  skip Ctrl+Enter when the button matcher already triggered
+  Add/Update (avoids double-add); longer waits (2400ms dialog,
+  6600ms compile) for heavy indicators; "Save and add to chart"
+  confirmation dialog handling.
 
 ### Fixed
 
