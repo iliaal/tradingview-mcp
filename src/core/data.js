@@ -2,14 +2,23 @@
  * Core data access logic.
  */
 import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, KNOWN_PATHS, safeString } from '../connection.js';
-import { setTimeframe as _setTimeframe } from './chart.js';
+import { setTimeframe as _setTimeframe, setSymbol as _setSymbol } from './chart.js';
 import { detectPatternsInBars, KNOWN_PATTERNS } from './patterns.js';
 
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
+    setSymbol: deps?.setSymbol || _setSymbol,
   };
+}
+
+// Normalize "EXCHANGE:TICKER" to bare ticker for equality checks. Quote
+// callers pass tickers many ways ("AAPL", "NASDAQ:AAPL"); the chart's
+// symbol() may return either form. Stripping the prefix avoids redundant
+// chart switches when the requested symbol is already loaded.
+function _bareSymbol(s) {
+  return String(s || '').split(':').pop().toUpperCase();
 }
 
 const MAX_OHLCV_BARS = 500;
@@ -391,39 +400,60 @@ export async function getEquity({ _deps } = {}) {
 }
 
 export async function getQuote({ symbol, _deps } = {}) {
-  const { evaluate } = _resolve(_deps);
-  const data = await evaluate(`
-    (function() {
-      var api = ${CHART_API};
-      var sym = ${safeString(symbol || '')};
-      if (!sym) { try { sym = api.symbol(); } catch(e) {} }
-      if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
-      var ext = {};
-      try { ext = api.symbolExt() || {}; } catch(e) {}
-      var bars = ${BARS_PATH};
-      var quote = { symbol: sym };
-      if (bars && typeof bars.lastIndex === 'function') {
-        var last = bars.valueAt(bars.lastIndex());
-        if (last) { quote.time = last[0]; quote.open = last[1]; quote.high = last[2]; quote.low = last[3]; quote.close = last[4]; quote.last = last[4]; quote.volume = last[5] || 0; }
-      }
-      try {
-        var bidEl = document.querySelector('[class*="bid"] [class*="price"], [class*="dom-"] [class*="bid"]');
-        var askEl = document.querySelector('[class*="ask"] [class*="price"], [class*="dom-"] [class*="ask"]');
-        if (bidEl) quote.bid = parseFloat(bidEl.textContent.replace(/[^0-9.\\-]/g, ''));
-        if (askEl) quote.ask = parseFloat(askEl.textContent.replace(/[^0-9.\\-]/g, ''));
-      } catch(e) {}
-      try {
-        var hdr = document.querySelector('[class*="headerRow"] [class*="last-"]');
-        if (hdr) { var hdrPrice = parseFloat(hdr.textContent.replace(/[^0-9.\\-]/g, '')); if (!isNaN(hdrPrice)) quote.header_price = hdrPrice; }
-      } catch(e) {}
-      if (ext.description) quote.description = ext.description;
-      if (ext.exchange) quote.exchange = ext.exchange;
-      if (ext.type) quote.type = ext.type;
-      return quote;
-    })()
-  `);
-  if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
-  return { success: true, ...data };
+  const { evaluate, setSymbol } = _resolve(_deps);
+
+  // If the caller asked for a specific symbol that isn't currently loaded,
+  // switch the chart, read, and restore. Without this the IIFE always
+  // returned the active chart's bars regardless of `symbol`, so parallel
+  // quote_get calls across many tickers all returned identical data.
+  let originalSymbol = null;
+  let switched = false;
+  if (symbol) {
+    try { originalSymbol = await evaluate(`${CHART_API}.symbol()`); } catch { /* ignore */ }
+    if (originalSymbol && _bareSymbol(originalSymbol) !== _bareSymbol(symbol)) {
+      await setSymbol({ symbol, _deps });
+      switched = true;
+    }
+  }
+
+  try {
+    const data = await evaluate(`
+      (function() {
+        var api = ${CHART_API};
+        var sym = '';
+        try { sym = api.symbol(); } catch(e) {}
+        if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
+        var ext = {};
+        try { ext = api.symbolExt() || {}; } catch(e) {}
+        var bars = ${BARS_PATH};
+        var quote = { symbol: sym };
+        if (bars && typeof bars.lastIndex === 'function') {
+          var last = bars.valueAt(bars.lastIndex());
+          if (last) { quote.time = last[0]; quote.open = last[1]; quote.high = last[2]; quote.low = last[3]; quote.close = last[4]; quote.last = last[4]; quote.volume = last[5] || 0; }
+        }
+        try {
+          var bidEl = document.querySelector('[class*="bid"] [class*="price"], [class*="dom-"] [class*="bid"]');
+          var askEl = document.querySelector('[class*="ask"] [class*="price"], [class*="dom-"] [class*="ask"]');
+          if (bidEl) quote.bid = parseFloat(bidEl.textContent.replace(/[^0-9.\\-]/g, ''));
+          if (askEl) quote.ask = parseFloat(askEl.textContent.replace(/[^0-9.\\-]/g, ''));
+        } catch(e) {}
+        try {
+          var hdr = document.querySelector('[class*="headerRow"] [class*="last-"]');
+          if (hdr) { var hdrPrice = parseFloat(hdr.textContent.replace(/[^0-9.\\-]/g, '')); if (!isNaN(hdrPrice)) quote.header_price = hdrPrice; }
+        } catch(e) {}
+        if (ext.description) quote.description = ext.description;
+        if (ext.exchange) quote.exchange = ext.exchange;
+        if (ext.type) quote.type = ext.type;
+        return quote;
+      })()
+    `);
+    if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
+    return { success: true, ...data };
+  } finally {
+    if (switched) {
+      try { await setSymbol({ symbol: originalSymbol, _deps }); } catch { /* best-effort restore */ }
+    }
+  }
 }
 
 export async function getDepth({ _deps } = {}) {

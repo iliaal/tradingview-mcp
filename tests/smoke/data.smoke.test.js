@@ -109,6 +109,65 @@ describe('core/data.js — smoke', () => {
     await assert.rejects(data.getQuote({}), /Could not retrieve quote/);
   });
 
+  it('test_getQuote_smoke_switchesAndRestoresSymbol', async () => {
+    // Chart currently on TSLA, caller asks for NVDA. Verify we read the
+    // current symbol, call setSymbol(NVDA), read the quote, then restore TSLA.
+    let evalCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        evalCalls++;
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return { symbol: 'NASDAQ:NVDA', last: 500, close: 500 };
+      },
+    });
+    const setSymbolCalls = [];
+    const r = await data.getQuote({
+      symbol: 'NVDA',
+      _deps: { setSymbol: async ({ symbol }) => { setSymbolCalls.push(symbol); } },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.symbol, 'NASDAQ:NVDA');
+    assert.equal(r.last, 500);
+    assert.deepEqual(setSymbolCalls, ['NVDA', 'NASDAQ:TSLA']);
+    assert.ok(evalCalls >= 2);
+  });
+
+  it('test_getQuote_smoke_skipsSwitchWhenSymbolMatches', async () => {
+    // Chart already on NVDA; bare-ticker comparison should skip the switch.
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:NVDA';
+        return { symbol: 'NASDAQ:NVDA', last: 500, close: 500 };
+      },
+    });
+    let switchCount = 0;
+    const r = await data.getQuote({
+      symbol: 'NVDA',
+      _deps: { setSymbol: async () => { switchCount++; } },
+    });
+    assert.equal(r.success, true);
+    assert.equal(switchCount, 0);
+  });
+
+  it('test_getQuote_smoke_restoresOnFailure', async () => {
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return { symbol: 'NASDAQ:NVDA' }; // no last/close → throws
+      },
+    });
+    const setSymbolCalls = [];
+    await assert.rejects(
+      data.getQuote({
+        symbol: 'NVDA',
+        _deps: { setSymbol: async ({ symbol }) => { setSymbolCalls.push(symbol); } },
+      }),
+      /Could not retrieve quote/,
+    );
+    // Switched to NVDA, then restored TSLA in finally.
+    assert.deepEqual(setSymbolCalls, ['NVDA', 'NASDAQ:TSLA']);
+  });
+
   it('test_getDepth_smoke', async () => {
     installCdpMocks({
       evaluate: async () => ({
