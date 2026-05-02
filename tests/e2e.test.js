@@ -35,6 +35,7 @@ import CDP from 'chrome-remote-interface';
 import * as coreUi from '../src/core/ui.js';
 import * as coreReplay from '../src/core/replay.js';
 import * as coreHealth from '../src/core/health.js';
+import * as coreAlerts from '../src/core/alerts.js';
 import * as coreData from '../src/core/data.js';
 import * as corePane from '../src/core/pane.js';
 import * as coreChart from '../src/core/chart.js';
@@ -1303,6 +1304,48 @@ val = array.get(a, 5)`;
       // Just verify the alerts button exists for context menu
       const found = await evaluate(`!!document.querySelector('[data-name="alerts"]')`);
       assert.ok(typeof found === 'boolean', 'Alerts button detection works');
+    });
+
+    it('alert_create_indicator — input validation rejects bad args', async () => {
+      const missingPineId = await coreAlerts.createIndicator({
+        alert_cond_id: 'plot_0',
+        inputs: { __profile: false },
+        offsets_by_plot: { plot_0: 0 },
+      });
+      assert.equal(missingPineId.success, false);
+      assert.match(missingPineId.error, /pine_id is required/);
+
+      const missingCond = await coreAlerts.createIndicator({
+        pine_id: 'USER;deadbeef',
+        inputs: { __profile: false },
+        offsets_by_plot: { plot_0: 0 },
+      });
+      assert.equal(missingCond.success, false);
+      assert.match(missingCond.error, /alert_cond_id is required/);
+    });
+
+    it('alert_create_indicator — resolves active chart context, surfaces TV API error', async () => {
+      // Without symbol/currency/resolution we should fall through to the
+      // TV REST endpoint with the active chart's metadata. The fake pine_id
+      // makes TV reject the create — we assert (a) we got past chart-read,
+      // (b) the response shape is the documented rest_api error envelope,
+      // (c) the hint is wired so callers know what to try next.
+      //
+      // TV may return HTTP 200 with `s != 'ok'` OR an HTTP 4xx — both flow
+      // through our error path. The only thing we don't accept is an
+      // `alert_id`, which would mean we accidentally created a real alert
+      // with a fake pine_id (worth investigating if it ever happens).
+      const r = await coreAlerts.createIndicator({
+        pine_id: 'USER;0000000000000000000000000000dead',
+        alert_cond_id: 'plot_0',
+        inputs: { pineFeatures: '{"indicator":1}', __profile: false },
+        offsets_by_plot: { plot_0: 0 },
+      });
+      assert.equal(r.success, false, `unexpectedly created an alert with a fake pine_id: ${JSON.stringify(r)}`);
+      assert.equal(r.source, 'rest_api');
+      assert.ok(!/Could not read active chart symbol/.test(r.error || ''), `failed before reaching the API: ${r.error}`);
+      assert.match(r.hint || '', /alert_cond_id off-by-one/);
+      assert.ok(r.error, 'has an error message');
     });
   });
 

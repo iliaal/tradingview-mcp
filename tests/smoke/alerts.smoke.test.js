@@ -63,4 +63,126 @@ describe('core/alerts.js — smoke', () => {
       /not yet supported/,
     );
   });
+
+  describe('createIndicator', () => {
+    const VALID = {
+      pine_id: 'USER;abc123',
+      alert_cond_id: 'plot_12',
+      inputs: { pineFeatures: '{"indicator":1}', in_0: 14, __profile: false },
+      offsets_by_plot: { plot_0: 0, plot_1: 0 },
+      symbol: 'NASDAQ:AAPL',
+      currency: 'USD',
+      resolution: '60',
+    };
+
+    it('test_createIndicator_smoke_missingPineId', async () => {
+      const r = await alerts.createIndicator({ ...VALID, pine_id: undefined });
+      assert.equal(r.success, false);
+      assert.match(r.error, /pine_id is required/);
+    });
+
+    it('test_createIndicator_smoke_missingAlertCondId', async () => {
+      const r = await alerts.createIndicator({ ...VALID, alert_cond_id: undefined });
+      assert.equal(r.success, false);
+      assert.match(r.error, /alert_cond_id is required/);
+    });
+
+    it('test_createIndicator_smoke_missingInputs', async () => {
+      const r = await alerts.createIndicator({ ...VALID, inputs: undefined });
+      assert.equal(r.success, false);
+      assert.match(r.error, /inputs is required/);
+    });
+
+    it('test_createIndicator_smoke_missingOffsets', async () => {
+      const r = await alerts.createIndicator({ ...VALID, offsets_by_plot: undefined });
+      assert.equal(r.success, false);
+      assert.match(r.error, /offsets_by_plot is required/);
+    });
+
+    it('test_createIndicator_smoke_success', async () => {
+      let captured = null;
+      installCdpMocks({
+        evaluateAsync: async (script) => {
+          captured = script;
+          return { status: 200, body: JSON.stringify({ s: 'ok', r: { alert_id: 'al-9001', expiration: '2026-06-01T00:00:00Z' } }) };
+        },
+      });
+      const r = await alerts.createIndicator({ ...VALID, message: 'BUY {{ticker}}', web_hook: 'https://example.com/hook' });
+      assert.equal(r.success, true);
+      assert.equal(r.alert_id, 'al-9001');
+      assert.equal(r.symbol, 'NASDAQ:AAPL');
+      assert.equal(r.alert_cond_id, 'plot_12');
+      assert.equal(r.web_hook, 'https://example.com/hook');
+      assert.match(captured, /pricealerts\.tradingview\.com\/create_alert/);
+      // Body is embedded as a JSON-encoded string literal; recover the
+      // original payload by parsing twice.
+      const bodyMatch = captured.match(/body:\s*("(?:[^"\\]|\\.)*")/);
+      assert.ok(bodyMatch, 'body literal present');
+      const obj = JSON.parse(JSON.parse(bodyMatch[1]));
+      assert.equal(obj.payload.conditions[0].alert_cond_id, 'plot_12');
+      assert.equal(obj.payload.conditions[0].series[0].pine_id, 'USER;abc123');
+      assert.equal(obj.payload.message, 'BUY {{ticker}}');
+    });
+
+    it('test_createIndicator_smoke_apiError', async () => {
+      installCdpMocks({
+        evaluateAsync: async () => ({ status: 400, body: JSON.stringify({ s: 'error', errmsg: 'invalid alert_cond_id' }) }),
+      });
+      const r = await alerts.createIndicator(VALID);
+      assert.equal(r.success, false);
+      assert.equal(r.http_status, 400);
+      assert.match(r.error, /invalid alert_cond_id/);
+      assert.match(r.hint, /alert_cond_id off-by-one/);
+    });
+
+    it('test_createIndicator_smoke_resolvesActiveChart', async () => {
+      // Caller omits symbol/currency/resolution → core reads them from chart.
+      let evalCall = 0;
+      installCdpMocks({
+        evaluate: async () => {
+          evalCall++;
+          return { symbol: 'OANDA:USDJPY', currency: 'JPY', resolution: '240' };
+        },
+        evaluateAsync: async () => ({ status: 200, body: JSON.stringify({ s: 'ok', r: { alert_id: 'al-1' } }) }),
+      });
+      const r = await alerts.createIndicator({
+        pine_id: VALID.pine_id,
+        alert_cond_id: VALID.alert_cond_id,
+        inputs: VALID.inputs,
+        offsets_by_plot: VALID.offsets_by_plot,
+      });
+      assert.equal(r.success, true);
+      assert.equal(r.symbol, 'OANDA:USDJPY');
+      assert.equal(r.resolution, '240');
+      assert.ok(evalCall >= 1);
+    });
+
+    it('test_createIndicator_smoke_chartReadFailureSurfaces', async () => {
+      installCdpMocks({ evaluate: async () => ({ error: 'chart not ready' }) });
+      const r = await alerts.createIndicator({
+        pine_id: VALID.pine_id,
+        alert_cond_id: VALID.alert_cond_id,
+        inputs: VALID.inputs,
+        offsets_by_plot: VALID.offsets_by_plot,
+      });
+      assert.equal(r.success, false);
+      assert.match(r.error, /Could not read active chart symbol/);
+    });
+
+    it('test_createIndicator_smoke_capsExpiration', async () => {
+      let captured = null;
+      installCdpMocks({
+        evaluateAsync: async (script) => {
+          captured = script;
+          return { status: 200, body: JSON.stringify({ s: 'ok', r: {} }) };
+        },
+      });
+      await alerts.createIndicator({ ...VALID, expiration_days: 999 });
+      const bodyMatch = captured.match(/body:\s*("(?:[^"\\]|\\.)*")/);
+      const obj = JSON.parse(JSON.parse(bodyMatch[1]));
+      const ms = new Date(obj.payload.expiration).getTime() - Date.now();
+      const days = ms / (24 * 60 * 60 * 1000);
+      assert.ok(days <= 60.1 && days >= 59.9, `expiration capped at 60 days, got ${days}`);
+    });
+  });
 });

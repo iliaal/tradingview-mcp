@@ -77,6 +77,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ### "Manage alerts"
 - `alert_create` → set price alert (condition: "crossing", "greater_than", "less_than")
+- `alert_create_indicator` → create alert that fires on a Pine `alertcondition()` signal (BUY/SELL → webhook). Posts directly to `pricealerts.tradingview.com/create_alert`. Needs `pine_id`, `alert_cond_id` (e.g. `plot_12`), `inputs`, `offsets_by_plot`. Discover the schema by creating one alert manually in the UI then reading it back via `alert_list`.
 - `alert_list` → view active alerts
 - `alert_delete` → remove alerts
 

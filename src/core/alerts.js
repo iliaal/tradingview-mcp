@@ -245,3 +245,172 @@ export async function deleteAlerts({ delete_all, _deps }) {
   }
   throw new Error('Individual alert deletion not yet supported. Use delete_all: true.');
 }
+
+const INDICATOR_DEFAULT_EXPIRATION_DAYS = 30;
+const INDICATOR_MAX_EXPIRATION_DAYS = 60;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Create an *indicator* alert that fires on a Pine `alertcondition()` signal.
+ *
+ * Companion to `create()` — where `create()` produces a price-level alert via
+ * the TV alert dialog, this posts directly to TV's REST endpoint with an
+ * `alert_cond` condition referencing a saved Pine script's plot index. The
+ * intended use is automating strategy-style Pine alerts (BUY/SELL signals
+ * piped to a webhook URL) without clicking through the UI for each one.
+ *
+ * Determining `alert_cond_id` (gotcha): TV counts plot-emitting calls in
+ * source order — `plot()`, `plotshape()`, `bgcolor()`, AND `alertcondition()`.
+ * `hline()` is NOT counted. So a script with 10 `plot()` + 2 `plotshape()` +
+ * 2 `alertcondition()` (BUY then SELL) yields BUY = `plot_12`, SELL = `plot_13`.
+ * Easiest discovery: create one alert manually in the TV UI, then call
+ * `alert_list` and read the resulting `alert_cond_id` plus the `inputs` /
+ * `offsets_by_plot` shape from the response.
+ *
+ * CORS note: do NOT add a Content-Type header on the fetch — a custom
+ * Content-Type triggers a preflight OPTIONS that pricealerts.tradingview.com
+ * rejects. The server happily parses the body without an explicit Content-Type.
+ */
+export async function createIndicator({
+  pine_id,
+  pine_version,
+  alert_cond_id,
+  inputs,
+  offsets_by_plot,
+  symbol,
+  currency,
+  resolution,
+  message,
+  web_hook,
+  frequency,
+  expiration_days,
+  active,
+  _deps,
+} = {}) {
+  const { evaluate, evaluateAsync } = _resolve(_deps);
+
+  if (!pine_id || typeof pine_id !== 'string') {
+    return { success: false, error: 'pine_id is required (e.g. "USER;abc123..." from pine_list_scripts)', source: 'rest_api' };
+  }
+  if (!alert_cond_id || typeof alert_cond_id !== 'string') {
+    return { success: false, error: 'alert_cond_id is required (e.g. "plot_12")', source: 'rest_api' };
+  }
+  if (!inputs || typeof inputs !== 'object') {
+    return { success: false, error: 'inputs is required (object matching the script\'s input.X order)', source: 'rest_api' };
+  }
+  if (!offsets_by_plot || typeof offsets_by_plot !== 'object') {
+    return { success: false, error: 'offsets_by_plot is required (e.g. { plot_0: 0, plot_1: 0, ... })', source: 'rest_api' };
+  }
+
+  let resolvedSymbol = symbol;
+  let resolvedCurrency = currency;
+  let resolvedResolution = resolution;
+
+  if (!resolvedSymbol || !resolvedCurrency || !resolvedResolution) {
+    const symbolInfo = await evaluate(`
+      (function() {
+        try {
+          var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+          var model = chart.model();
+          var sym = model.mainSeries().symbol();
+          var info = model.mainSeries().symbolInfo ? model.mainSeries().symbolInfo() : null;
+          return {
+            symbol: sym,
+            currency: (info && info.currency_code) || 'USD',
+            resolution: model.mainSeries().properties().interval.value() || '1'
+          };
+        } catch(e) { return { error: e.message }; }
+      })()
+    `);
+    if (!symbolInfo || symbolInfo.error || !symbolInfo.symbol) {
+      return { success: false, error: 'Could not read active chart symbol: ' + (symbolInfo?.error || 'unknown') + ' — pass symbol/currency/resolution explicitly', source: 'rest_api' };
+    }
+    resolvedSymbol = resolvedSymbol || symbolInfo.symbol;
+    resolvedCurrency = resolvedCurrency || symbolInfo.currency;
+    resolvedResolution = resolvedResolution || String(symbolInfo.resolution || '1');
+  }
+
+  const symbolMarker = '=' + JSON.stringify({
+    symbol: resolvedSymbol,
+    adjustment: 'dividends',
+    'currency-id': resolvedCurrency,
+  });
+
+  const days = Number.isFinite(Number(expiration_days)) && Number(expiration_days) > 0
+    ? Math.min(Math.floor(Number(expiration_days)), INDICATOR_MAX_EXPIRATION_DAYS)
+    : INDICATOR_DEFAULT_EXPIRATION_DAYS;
+  const expiration = new Date(Date.now() + days * MS_PER_DAY).toISOString();
+
+  const payload = {
+    symbol: symbolMarker,
+    resolution: String(resolvedResolution),
+    message: message || '',
+    sound_file: null,
+    sound_duration: 0,
+    popup: false,
+    expiration,
+    auto_deactivate: false,
+    email: false,
+    sms_over_email: false,
+    mobile_push: false,
+    web_hook: web_hook || null,
+    name: null,
+    conditions: [{
+      type: 'alert_cond',
+      frequency: frequency || 'on_bar_close',
+      alert_cond_id,
+      series: [{
+        type: 'study',
+        study: 'Script@tv-scripting-101',
+        offsets_by_plot,
+        inputs,
+        pine_id,
+        pine_version: pine_version || '1.0',
+      }],
+      resolution: String(resolvedResolution),
+    }],
+    active: active !== false,
+    ignore_warnings: true,
+  };
+
+  const body = JSON.stringify({ payload });
+  const response = await evaluateAsync(`
+    fetch('https://pricealerts.tradingview.com/create_alert', {
+      method: 'POST',
+      credentials: 'include',
+      body: ${JSON.stringify(body)}
+    }).then(function(r) { return r.text().then(function(t) { return { status: r.status, body: t }; }); })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+
+  if (!response || response.error) {
+    return { success: false, error: response?.error || 'no response', source: 'rest_api' };
+  }
+
+  let parsed = null;
+  try { parsed = JSON.parse(response.body); } catch { /* not JSON */ }
+
+  if (parsed?.s === 'ok' && parsed?.r) {
+    const created = parsed.r;
+    return {
+      success: true,
+      alert_id: created.alert_id || null,
+      symbol: resolvedSymbol,
+      pine_id,
+      alert_cond_id,
+      resolution: String(resolvedResolution),
+      message: payload.message,
+      web_hook: payload.web_hook,
+      expiration: created.expiration || expiration,
+      source: 'rest_api',
+    };
+  }
+
+  return {
+    success: false,
+    error: parsed?.errmsg || parsed?.err?.code || (response.body ? String(response.body).substring(0, 200) : 'unknown'),
+    http_status: response.status,
+    hint: 'Common cause: alert_cond_id off-by-one (try plot_N+/-1) or inputs schema mismatch. Create one alert manually in the TV UI and call alert_list to compare.',
+    source: 'rest_api',
+  };
+}
