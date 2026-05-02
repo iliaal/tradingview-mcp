@@ -31,6 +31,29 @@ function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
       var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
       var model = chart.model();
       var sources = model.model().dataSources();
+      var mainBars = null;
+      try { mainBars = chart.model().mainSeries().bars(); } catch(e) {}
+      function barValueAt(barIdx) {
+        if (typeof barIdx !== 'number') return null;
+        if (!mainBars || typeof mainBars.valueAt !== 'function') return null;
+        try { return mainBars.valueAt(barIdx) || null; } catch(e) { return null; }
+      }
+      function barTimeAt(barIdx) { var v = barValueAt(barIdx); return v ? v[0] : null; }
+      function barOhlcvAt(barIdx) {
+        var v = barValueAt(barIdx);
+        if (!v) return null;
+        return { time: v[0], open: v[1], high: v[2], low: v[3], close: v[4], volume: v[5] || 0 };
+      }
+      // Drawing primitives store v.x as a sequence number into the study's
+      // _indexes array, NOT a chart bar index. Resolve via _indexes[seq] before
+      // calling barValueAt — same lookup TV's internal _materializePrimitive does.
+      // Filter sentinel values (INVALID_TIME_POINT_INDEX is a large negative).
+      function realBarIdx(seq, indexes) {
+        if (typeof seq !== 'number' || !indexes) return null;
+        if (seq < 0 || seq >= indexes.length) return null;
+        var idx = indexes[seq];
+        return (typeof idx === 'number' && idx > -1e9) ? idx : null;
+      }
       var results = [];
       var filter = ${safeString(filter || '')};
       var maxItems = ${cap};
@@ -45,8 +68,20 @@ function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
           var g = s._graphics;
           if (!g || !g._primitivesCollection) continue;
           var pc = g._primitivesCollection;
+          var indexes = Array.isArray(g._indexes) ? g._indexes : null;
           var items = [];
           var totalCount = 0;
+          function decorate(v, id) {
+            var bIdx = realBarIdx(v.x, indexes);
+            return {
+              id: id,
+              raw: v,
+              bar_time: barTimeAt(bIdx),
+              bar_time1: barTimeAt(realBarIdx(v.x1, indexes)),
+              bar_time2: barTimeAt(realBarIdx(v.x2, indexes)),
+              bar_ohlcv: barOhlcvAt(bIdx),
+            };
+          }
           try {
             var outer = pc.${collectionName};
             if (outer) {
@@ -55,7 +90,7 @@ function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
                 var coll = inner.get(false);
                 if (coll && coll._primitivesDataById && coll._primitivesDataById.size > 0) {
                   totalCount = coll._primitivesDataById.size;
-                  coll._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
+                  coll._primitivesDataById.forEach(function(v, id) { items.push(decorate(v, id)); });
                 }
               }
             }
@@ -67,7 +102,7 @@ function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
                 var tcColl = tcOuter.get('tableCells');
                 if (tcColl && tcColl._primitivesDataById && tcColl._primitivesDataById.size > 0) {
                   totalCount = tcColl._primitivesDataById.size;
-                  tcColl._primitivesDataById.forEach(function(v, id) { items.push({id: id, raw: v}); });
+                  tcColl._primitivesDataById.forEach(function(v, id) { items.push(decorate(v, id)); });
                 }
               }
             } catch(e) {}
@@ -79,6 +114,15 @@ function buildGraphicsJS(collectionName, mapKey, filter, maxItems) {
       return results;
     })()
   `;
+}
+
+function _toEpochSeconds(val) {
+  if (val == null) return null;
+  if (typeof val === 'number') return val;
+  const d = new Date(val);
+  const t = d.getTime();
+  if (isNaN(t)) return null;
+  return Math.floor(t / 1000);
 }
 
 export async function getOhlcv({ count, summary, _deps } = {}) {
@@ -492,24 +536,14 @@ export async function getPineLines({ study_filter, verbose, _deps } = {}) {
   return { success: true, study_count: studies.length, studies };
 }
 
-export async function getPineLabels({ study_filter, max_labels, verbose, _deps } = {}) {
+export async function getPineLabels({ study_filter, max_labels, verbose, since, until, _deps } = {}) {
   const { evaluate } = _resolve(_deps);
   const filter = study_filter || '';
   const limit = max_labels || 50;
   const raw = await evaluate(buildGraphicsJS('dwglabels', 'labels', filter, limit));
   if (!raw || raw.length === 0) return { success: true, study_count: 0, studies: [] };
 
-  const studies = raw.map(s => {
-    let labels = s.items.map(item => {
-      const v = item.raw;
-      const text = v.t || '';
-      const price = v.y != null ? Math.round(v.y * 100) / 100 : null;
-      if (verbose) return { id: item.id, text, price, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
-      return { text, price };
-    }).filter(l => l.text || l.price != null);
-    if (labels.length > limit) labels = labels.slice(-limit);
-    return { name: s.name, total_labels: s.count, showing: labels.length, labels };
-  });
+  const studies = formatPineLabels(raw, limit, verbose, since, until);
   return { success: true, study_count: studies.length, studies };
 }
 
@@ -711,16 +745,36 @@ function formatPineLines(raw, verbose) {
   });
 }
 
-function formatPineLabels(raw, max_labels, verbose) {
+function formatPineLabels(raw, max_labels, verbose, since, until) {
   const limit = max_labels || 50;
+  const sinceSec = _toEpochSeconds(since);
+  const untilSec = _toEpochSeconds(until);
+  const round4 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 10000) / 10000 : null);
   return (raw || []).map(s => {
     let labels = s.items.map(item => {
       const v = item.raw;
       const text = v.t || '';
       const price = v.y != null ? Math.round(v.y * 100) / 100 : null;
-      if (verbose) return { id: item.id, text, price, x: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
-      return { text, price };
+      const bar_time = item.bar_time != null ? item.bar_time : null;
+      const ohlcv = item.bar_ohlcv || null;
+      // signal_price = the bar's close at the time the label was drawn — i.e.
+      // the actual market price when the signal fired. Independent of where
+      // the indicator chose to *draw* the label (often offset above/below
+      // the candle for legibility), so agents can correlate labels to the
+      // real bar event without misreading the visual offset as the price.
+      const signal_price = ohlcv ? round4(ohlcv.close) : null;
+      const bar = ohlcv ? {
+        open: round4(ohlcv.open),
+        high: round4(ohlcv.high),
+        low: round4(ohlcv.low),
+        close: round4(ohlcv.close),
+        volume: ohlcv.volume,
+      } : null;
+      if (verbose) return { id: item.id, text, price, signal_price, bar, bar_time, bar_index: v.x, yloc: v.yl, size: v.sz, textColor: v.tci, color: v.ci };
+      return { text, price, signal_price, bar, bar_time };
     }).filter(l => l.text || l.price != null);
+    if (sinceSec != null) labels = labels.filter(l => l.bar_time != null && l.bar_time >= sinceSec);
+    if (untilSec != null) labels = labels.filter(l => l.bar_time != null && l.bar_time <= untilSec);
     if (labels.length > limit) labels = labels.slice(-limit);
     return { name: s.name, total_labels: s.count, showing: labels.length, labels };
   });

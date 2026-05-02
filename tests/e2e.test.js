@@ -500,6 +500,45 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
       }
     });
 
+    it('data_get_pine_labels — bar_time + signal_price + bar enrichment', async () => {
+      // Schema-only check. Some labels (or all, on bare charts) may be at
+      // unresolved bar indices; we only assert the fields exist and that the
+      // bar object, when present, has plausible OHLC ordering.
+      const r = await coreData.getPineLabels({ verbose: false });
+      assert.equal(r.success, true);
+      const allLabels = (r.studies || []).flatMap(s => s.labels || []);
+      for (const lbl of allLabels) {
+        assert.ok('bar_time' in lbl, 'bar_time field present');
+        assert.ok('signal_price' in lbl, 'signal_price field present');
+        assert.ok('bar' in lbl, 'bar field present');
+        if (lbl.bar) {
+          assert.ok(lbl.bar.high >= lbl.bar.low, `bar.high ${lbl.bar.high} >= bar.low ${lbl.bar.low}`);
+          assert.equal(typeof lbl.bar.close, 'number');
+          assert.equal(lbl.signal_price, lbl.bar.close, 'signal_price tracks bar.close');
+        }
+        if (lbl.bar_time != null) {
+          assert.ok(lbl.bar_time > 1_000_000_000, `bar_time looks like unix seconds: ${lbl.bar_time}`);
+        }
+      }
+    });
+
+    it('data_get_pine_labels — since/until time filter', async () => {
+      // Filter to a window covering "now" — should return labels with
+      // bar_time inside the window (or empty if no labels exist on the chart).
+      const nowSec = Math.floor(Date.now() / 1000);
+      const tenYearsAgo = nowSec - 10 * 365 * 24 * 3600;
+      const r = await coreData.getPineLabels({ since: tenYearsAgo, until: nowSec + 3600 });
+      assert.equal(r.success, true);
+      for (const s of r.studies || []) {
+        for (const lbl of s.labels || []) {
+          if (lbl.bar_time != null) {
+            assert.ok(lbl.bar_time >= tenYearsAgo, `${lbl.bar_time} >= since`);
+            assert.ok(lbl.bar_time <= nowSec + 3600, `${lbl.bar_time} <= until`);
+          }
+        }
+      }
+    });
+
     it('data_get_pine_tables — table cell data', async () => {
       const data = await evaluate(`
         (function() {

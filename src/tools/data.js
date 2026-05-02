@@ -55,12 +55,14 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('data_get_pine_labels', 'Read text labels drawn by Pine Script indicators (label.new). Returns text and price pairs. Use study_filter to target a specific indicator.', {
+  server.tool('data_get_pine_labels', 'Read text labels drawn by Pine Script indicators (label.new). Returns text, price (label\'s display y), signal_price (close of the bar where the label was drawn — the actual market price when the signal fired), bar (OHLCV of that bar), and bar_time (unix seconds). Use study_filter to target a specific indicator, and since/until to restrict to a time range.', {
     study_filter: z.string().optional().describe('Substring to match study name. Omit for all.'),
     max_labels: z.coerce.number().optional().describe('Max labels per study (default 50). Set higher if you need all.'),
-    verbose: z.coerce.boolean().optional().describe('Return raw label data with IDs, colors, positions (default false — returns only text + price)'),
-  }, async ({ study_filter, max_labels, verbose }) => {
-    try { return jsonResult(await core.getPineLabels({ study_filter, max_labels, verbose })); }
+    verbose: z.coerce.boolean().optional().describe('Return raw label data with IDs, colors, positions (default false — returns text + price + signal_price + bar + bar_time)'),
+    since: z.union([z.string(), z.number()]).optional().describe('Only return labels at or after this time. Unix seconds or ISO date string (e.g., "2025-01-15").'),
+    until: z.union([z.string(), z.number()]).optional().describe('Only return labels at or before this time. Unix seconds or ISO date string.'),
+  }, async ({ study_filter, max_labels, verbose, since, until }) => {
+    try { return jsonResult(await core.getPineLabels({ study_filter, max_labels, verbose, since, until })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

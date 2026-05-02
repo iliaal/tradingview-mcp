@@ -162,6 +162,78 @@ describe('core/data.js — smoke', () => {
     assert.equal(r.studies[0].labels[0].text, 'PDH');
   });
 
+  it('test_getPineLabels_smoke_signalPriceAndBar', async () => {
+    // Items decorated by buildGraphicsJS expose bar_time + bar_ohlcv. Format
+    // surfaces signal_price (= ohlcv.close) + bar object.
+    installCdpMocks({
+      evaluate: async () => [{
+        name: 'Signals', count: 1, items: [{
+          id: 'lb1',
+          raw: { t: 'BUY', y: 195.55 }, // visual offset above candle
+          bar_time: 1735776000,
+          bar_ohlcv: { time: 1735776000, open: 190.1, high: 191.2, low: 189.3, close: 190.8, volume: 12345 },
+        }],
+      }],
+    });
+    const r = await data.getPineLabels({});
+    assert.equal(r.success, true);
+    const lbl = r.studies[0].labels[0];
+    assert.equal(lbl.text, 'BUY');
+    assert.equal(lbl.price, 195.55);
+    assert.equal(lbl.signal_price, 190.8);
+    assert.deepEqual(lbl.bar, { open: 190.1, high: 191.2, low: 189.3, close: 190.8, volume: 12345 });
+    assert.equal(lbl.bar_time, 1735776000);
+  });
+
+  it('test_getPineLabels_smoke_sinceUntilFilters', async () => {
+    installCdpMocks({
+      evaluate: async () => [{
+        name: 'Signals', count: 3, items: [
+          { id: 'a', raw: { t: 'A', y: 1 }, bar_time: 1700000000, bar_ohlcv: null },
+          { id: 'b', raw: { t: 'B', y: 2 }, bar_time: 1700001000, bar_ohlcv: null },
+          { id: 'c', raw: { t: 'C', y: 3 }, bar_time: 1700002000, bar_ohlcv: null },
+        ],
+      }],
+    });
+    // ISO date strings normalize to unix seconds via Date.parse.
+    const r = await data.getPineLabels({ since: 1700000500, until: 1700001500 });
+    assert.equal(r.success, true);
+    assert.equal(r.studies[0].labels.length, 1);
+    assert.equal(r.studies[0].labels[0].text, 'B');
+  });
+
+  it('test_getPineLabels_smoke_isoDateSinceFilter', async () => {
+    installCdpMocks({
+      evaluate: async () => [{
+        name: 'S', count: 2, items: [
+          { id: 'a', raw: { t: 'OLD', y: 1 }, bar_time: 1577836800 /* 2020-01-01 */, bar_ohlcv: null },
+          { id: 'b', raw: { t: 'NEW', y: 2 }, bar_time: 1735689600 /* 2025-01-01 */, bar_ohlcv: null },
+        ],
+      }],
+    });
+    const r = await data.getPineLabels({ since: '2024-01-01' });
+    assert.equal(r.studies[0].labels.length, 1);
+    assert.equal(r.studies[0].labels[0].text, 'NEW');
+  });
+
+  it('test_getPineLabels_smoke_handlesNullBarTime', async () => {
+    // Studies whose primitives have no resolvable bar idx (sentinel _indexes
+    // entries) decorate to bar_time=null. since/until filters drop those.
+    installCdpMocks({
+      evaluate: async () => [{
+        name: 'S', count: 2, items: [
+          { id: 'a', raw: { t: 'TIMED', y: 1 }, bar_time: 1700000000, bar_ohlcv: null },
+          { id: 'b', raw: { t: 'UNRESOLVED', y: 2 }, bar_time: null, bar_ohlcv: null },
+        ],
+      }],
+    });
+    const noFilter = await data.getPineLabels({});
+    assert.equal(noFilter.studies[0].labels.length, 2, 'both labels included without filter');
+    const withFilter = await data.getPineLabels({ since: 1699999000 });
+    assert.equal(withFilter.studies[0].labels.length, 1, 'unresolved bar_time dropped by filter');
+    assert.equal(withFilter.studies[0].labels[0].text, 'TIMED');
+  });
+
   it('test_getPineTables_smoke', async () => {
     installCdpMocks({
       evaluate: async () => [{
