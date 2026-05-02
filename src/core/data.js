@@ -399,59 +399,133 @@ export async function getEquity({ _deps } = {}) {
   return { success: true, data_points: equity?.data?.length || 0, source: equity?.source, data: equity?.data || [], equity_summary: equity?.equity_summary, note: equity?.note, error: equity?.error };
 }
 
-export async function getQuote({ symbol, _deps } = {}) {
-  const { evaluate, setSymbol } = _resolve(_deps);
+// Fetch a quote via TradingView's public scanner REST endpoint. Faster than
+// chart-switch and doesn't disturb the chart, but only covers symbols that
+// america/scan indexes (US equities). For crypto/forex/non-US the caller
+// should fall back to chart-switch via the dispatching getQuote().
+//
+// CORS gotcha (same one that bites alert_create_indicator): no Content-Type
+// header — a custom Content-Type triggers a preflight OPTIONS that the
+// scanner endpoint rejects. Embed the body via JSON.stringify so it lands
+// as a JS string literal in the page.
+async function _getQuoteViaScanner({ symbol, _deps }) {
+  const { evaluateAsync } = _resolve(_deps);
+  const ticker = String(symbol).trim();
+  const body = JSON.stringify({
+    symbols: { tickers: [ticker] },
+    columns: ['close', 'open', 'high', 'low', 'volume', 'description', 'exchange', 'type'],
+  });
+  const resp = await evaluateAsync(`
+    fetch('https://scanner.tradingview.com/america/scan', {
+      method: 'POST',
+      credentials: 'include',
+      body: ${JSON.stringify(body)}
+    })
+      .then(function(r) { return r.text().then(function(t) {
+        var parsed = null;
+        try { parsed = t ? JSON.parse(t) : null; } catch(e) {}
+        return { status: r.status, ok: r.ok, body: t, json: parsed };
+      }); })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+  if (!resp || resp.error) {
+    throw new Error(`scanner fetch failed: ${resp?.error || 'no response'}`);
+  }
+  if (!resp.ok) {
+    throw new Error(`scanner HTTP ${resp.status}: ${String(resp.body || '').slice(0, 200)}`);
+  }
+  const rows = resp.json?.data;
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(rows[0]?.d)) {
+    throw new Error(`scanner returned no data for "${ticker}" (use a fully-qualified symbol like "NASDAQ:TSCO", or pass route:'chart_switch' for non-US assets)`);
+  }
+  const [close, open, high, low, volume, description, exchange, type] = rows[0].d;
+  return {
+    success: true,
+    symbol: rows[0].s || ticker,
+    open, high, low, close,
+    last: close,
+    volume: volume || 0,
+    description: description || '',
+    exchange: exchange || '',
+    type: type || '',
+    source: 'scanner_rest',
+  };
+}
 
-  // If the caller asked for a specific symbol that isn't currently loaded,
-  // switch the chart, read, and restore. Without this the IIFE always
-  // returned the active chart's bars regardless of `symbol`, so parallel
-  // quote_get calls across many tickers all returned identical data.
-  let originalSymbol = null;
-  let switched = false;
+async function _getQuoteFromActiveChart({ _deps }) {
+  const { evaluate } = _resolve(_deps);
+  const data = await evaluate(`
+    (function() {
+      var api = ${CHART_API};
+      var sym = '';
+      try { sym = api.symbol(); } catch(e) {}
+      if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
+      var ext = {};
+      try { ext = api.symbolExt() || {}; } catch(e) {}
+      var bars = ${BARS_PATH};
+      var quote = { symbol: sym };
+      if (bars && typeof bars.lastIndex === 'function') {
+        var last = bars.valueAt(bars.lastIndex());
+        if (last) { quote.time = last[0]; quote.open = last[1]; quote.high = last[2]; quote.low = last[3]; quote.close = last[4]; quote.last = last[4]; quote.volume = last[5] || 0; }
+      }
+      try {
+        var bidEl = document.querySelector('[class*="bid"] [class*="price"], [class*="dom-"] [class*="bid"]');
+        var askEl = document.querySelector('[class*="ask"] [class*="price"], [class*="dom-"] [class*="ask"]');
+        if (bidEl) quote.bid = parseFloat(bidEl.textContent.replace(/[^0-9.\\-]/g, ''));
+        if (askEl) quote.ask = parseFloat(askEl.textContent.replace(/[^0-9.\\-]/g, ''));
+      } catch(e) {}
+      try {
+        var hdr = document.querySelector('[class*="headerRow"] [class*="last-"]');
+        if (hdr) { var hdrPrice = parseFloat(hdr.textContent.replace(/[^0-9.\\-]/g, '')); if (!isNaN(hdrPrice)) quote.header_price = hdrPrice; }
+      } catch(e) {}
+      if (ext.description) quote.description = ext.description;
+      if (ext.exchange) quote.exchange = ext.exchange;
+      if (ext.type) quote.type = ext.type;
+      return quote;
+    })()
+  `);
+  if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
+  return { success: true, ...data };
+}
+
+export async function getQuote({ symbol, route, _deps } = {}) {
+  const { evaluate, setSymbol } = _resolve(_deps);
+  const mode = route || 'auto';
+
+  // No symbol or symbol matches active chart → read in place. This path also
+  // gives bid/ask DOM scrape, which neither scanner nor chart-switch covers.
+  let activeSymbol = null;
   if (symbol) {
-    try { originalSymbol = await evaluate(`${CHART_API}.symbol()`); } catch { /* ignore */ }
-    if (originalSymbol && _bareSymbol(originalSymbol) !== _bareSymbol(symbol)) {
-      await setSymbol({ symbol, _deps });
-      switched = true;
+    try { activeSymbol = await evaluate(`${CHART_API}.symbol()`); } catch { /* ignore */ }
+  }
+  const symbolMatchesActive = !symbol || (activeSymbol && _bareSymbol(activeSymbol) === _bareSymbol(symbol));
+  if (symbolMatchesActive) {
+    const r = await _getQuoteFromActiveChart({ _deps });
+    return { ...r, source: 'active_chart' };
+  }
+
+  // Cross-symbol read. Scanner REST is fast and doesn't disturb the chart but
+  // is region-limited (america/scan covers US equities). Chart-switch is
+  // universal but visibly toggles the chart and waits for studies to settle.
+  if (mode === 'rest') {
+    return await _getQuoteViaScanner({ symbol, _deps });
+  }
+  if (mode === 'auto') {
+    try {
+      return await _getQuoteViaScanner({ symbol, _deps });
+    } catch {
+      // Fall through to chart_switch path below.
     }
   }
 
+  // chart_switch (explicit) or auto-fallback: setSymbol → read → restore.
+  await setSymbol({ symbol, _deps });
   try {
-    const data = await evaluate(`
-      (function() {
-        var api = ${CHART_API};
-        var sym = '';
-        try { sym = api.symbol(); } catch(e) {}
-        if (!sym) { try { sym = api.symbolExt().symbol; } catch(e) {} }
-        var ext = {};
-        try { ext = api.symbolExt() || {}; } catch(e) {}
-        var bars = ${BARS_PATH};
-        var quote = { symbol: sym };
-        if (bars && typeof bars.lastIndex === 'function') {
-          var last = bars.valueAt(bars.lastIndex());
-          if (last) { quote.time = last[0]; quote.open = last[1]; quote.high = last[2]; quote.low = last[3]; quote.close = last[4]; quote.last = last[4]; quote.volume = last[5] || 0; }
-        }
-        try {
-          var bidEl = document.querySelector('[class*="bid"] [class*="price"], [class*="dom-"] [class*="bid"]');
-          var askEl = document.querySelector('[class*="ask"] [class*="price"], [class*="dom-"] [class*="ask"]');
-          if (bidEl) quote.bid = parseFloat(bidEl.textContent.replace(/[^0-9.\\-]/g, ''));
-          if (askEl) quote.ask = parseFloat(askEl.textContent.replace(/[^0-9.\\-]/g, ''));
-        } catch(e) {}
-        try {
-          var hdr = document.querySelector('[class*="headerRow"] [class*="last-"]');
-          if (hdr) { var hdrPrice = parseFloat(hdr.textContent.replace(/[^0-9.\\-]/g, '')); if (!isNaN(hdrPrice)) quote.header_price = hdrPrice; }
-        } catch(e) {}
-        if (ext.description) quote.description = ext.description;
-        if (ext.exchange) quote.exchange = ext.exchange;
-        if (ext.type) quote.type = ext.type;
-        return quote;
-      })()
-    `);
-    if (!data || (!data.last && !data.close)) throw new Error('Could not retrieve quote. The chart may still be loading.');
-    return { success: true, ...data };
+    const r = await _getQuoteFromActiveChart({ _deps });
+    return { ...r, source: 'chart_switch' };
   } finally {
-    if (switched) {
-      try { await setSymbol({ symbol: originalSymbol, _deps }); } catch { /* best-effort restore */ }
+    if (activeSymbol) {
+      try { await setSymbol({ symbol: activeSymbol, _deps }); } catch { /* best-effort restore */ }
     }
   }
 }

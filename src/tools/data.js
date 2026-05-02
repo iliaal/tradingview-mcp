@@ -35,10 +35,11 @@ export function registerDataTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('quote_get', 'Get real-time quote data for a symbol (price, OHLC, volume)', {
+  server.tool('quote_get', 'Get real-time quote data for a symbol (price, OHLC, volume). Returns source: "active_chart" (symbol matches active chart, includes bid/ask), "scanner_rest" (fast cross-symbol via TV scanner — US equities only), or "chart_switch" (chart was briefly switched to read non-US assets).', {
     symbol: z.string().optional().describe('Symbol to quote (blank = current chart symbol)'),
-  }, async ({ symbol }) => {
-    try { return jsonResult(await core.getQuote({ symbol })); }
+    route: z.enum(['auto', 'rest', 'chart_switch']).optional().describe('Cross-symbol routing: "auto" (default — scanner REST first, chart-switch fallback), "rest" (scanner only — fails for non-US assets), "chart_switch" (always switch chart, slower but universal and matches active-chart schema including bid/ask).'),
+  }, async ({ symbol, route }) => {
+    try { return jsonResult(await core.getQuote({ symbol, route })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

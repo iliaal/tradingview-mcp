@@ -109,31 +109,9 @@ describe('core/data.js — smoke', () => {
     await assert.rejects(data.getQuote({}), /Could not retrieve quote/);
   });
 
-  it('test_getQuote_smoke_switchesAndRestoresSymbol', async () => {
-    // Chart currently on TSLA, caller asks for NVDA. Verify we read the
-    // current symbol, call setSymbol(NVDA), read the quote, then restore TSLA.
-    let evalCalls = 0;
-    installCdpMocks({
-      evaluate: async (expr) => {
-        evalCalls++;
-        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
-        return { symbol: 'NASDAQ:NVDA', last: 500, close: 500 };
-      },
-    });
-    const setSymbolCalls = [];
-    const r = await data.getQuote({
-      symbol: 'NVDA',
-      _deps: { setSymbol: async ({ symbol }) => { setSymbolCalls.push(symbol); } },
-    });
-    assert.equal(r.success, true);
-    assert.equal(r.symbol, 'NASDAQ:NVDA');
-    assert.equal(r.last, 500);
-    assert.deepEqual(setSymbolCalls, ['NVDA', 'NASDAQ:TSLA']);
-    assert.ok(evalCalls >= 2);
-  });
-
   it('test_getQuote_smoke_skipsSwitchWhenSymbolMatches', async () => {
-    // Chart already on NVDA; bare-ticker comparison should skip the switch.
+    // Chart already on NVDA; bare-ticker comparison should skip the route
+    // entirely and read in place via active_chart path.
     installCdpMocks({
       evaluate: async (expr) => {
         if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:NVDA';
@@ -141,31 +119,162 @@ describe('core/data.js — smoke', () => {
       },
     });
     let switchCount = 0;
+    let scannerCount = 0;
     const r = await data.getQuote({
       symbol: 'NVDA',
-      _deps: { setSymbol: async () => { switchCount++; } },
+      _deps: {
+        setSymbol: async () => { switchCount++; },
+        evaluateAsync: async () => { scannerCount++; return { ok: true, status: 200, json: { data: [] } }; },
+      },
     });
     assert.equal(r.success, true);
+    assert.equal(r.source, 'active_chart');
     assert.equal(switchCount, 0);
+    assert.equal(scannerCount, 0);
   });
 
-  it('test_getQuote_smoke_restoresOnFailure', async () => {
+  it('test_getQuote_smoke_routeAuto_usesScannerForCrossSymbol', async () => {
+    // Chart on TSLA, ask for NVDA. Default route is 'auto' — scanner first.
+    let scannerCalls = 0;
+    let switchCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return null;
+      },
+    });
+    const r = await data.getQuote({
+      symbol: 'NVDA',
+      _deps: {
+        setSymbol: async () => { switchCalls++; },
+        evaluateAsync: async () => {
+          scannerCalls++;
+          return {
+            ok: true, status: 200,
+            json: { data: [{ s: 'NASDAQ:NVDA', d: [500, 495, 510, 490, 1000000, 'NVIDIA Corp', 'NASDAQ', 'stock'] }] },
+          };
+        },
+      },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.source, 'scanner_rest');
+    assert.equal(r.symbol, 'NASDAQ:NVDA');
+    assert.equal(r.last, 500);
+    assert.equal(r.close, 500);
+    assert.equal(r.exchange, 'NASDAQ');
+    assert.equal(scannerCalls, 1);
+    assert.equal(switchCalls, 0, 'no chart switch when scanner succeeds');
+  });
+
+  it('test_getQuote_smoke_routeAuto_fallsBackToChartSwitchOnScannerEmpty', async () => {
+    // Scanner returns no data (e.g., crypto symbol). Auto should fall back.
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return { symbol: 'BINANCE:BTCUSDT', last: 50000, close: 50000 };
+      },
+    });
+    const switchCalls = [];
+    const r = await data.getQuote({
+      symbol: 'BINANCE:BTCUSDT',
+      _deps: {
+        setSymbol: async ({ symbol }) => { switchCalls.push(symbol); },
+        evaluateAsync: async () => ({ ok: true, status: 200, json: { data: [] } }),
+      },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.source, 'chart_switch');
+    assert.equal(r.last, 50000);
+    assert.deepEqual(switchCalls, ['BINANCE:BTCUSDT', 'NASDAQ:TSLA'], 'switched then restored');
+  });
+
+  it('test_getQuote_smoke_routeRest_throwsWhenScannerEmpty', async () => {
+    // Explicit route:'rest' must NOT fall back to chart-switch.
+    let switchCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return null;
+      },
+    });
+    await assert.rejects(
+      data.getQuote({
+        symbol: 'BINANCE:BTCUSDT',
+        route: 'rest',
+        _deps: {
+          setSymbol: async () => { switchCalls++; },
+          evaluateAsync: async () => ({ ok: true, status: 200, json: { data: [] } }),
+        },
+      }),
+      /scanner returned no data/,
+    );
+    assert.equal(switchCalls, 0);
+  });
+
+  it('test_getQuote_smoke_routeChartSwitch_skipsScanner', async () => {
+    let scannerCalls = 0;
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return { symbol: 'NASDAQ:NVDA', last: 500, close: 500 };
+      },
+    });
+    const switchCalls = [];
+    const r = await data.getQuote({
+      symbol: 'NVDA',
+      route: 'chart_switch',
+      _deps: {
+        setSymbol: async ({ symbol }) => { switchCalls.push(symbol); },
+        evaluateAsync: async () => { scannerCalls++; return { ok: true, status: 200, json: { data: [] } }; },
+      },
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.source, 'chart_switch');
+    assert.equal(scannerCalls, 0);
+    assert.deepEqual(switchCalls, ['NVDA', 'NASDAQ:TSLA']);
+  });
+
+  it('test_getQuote_smoke_chartSwitch_restoresOnFailure', async () => {
+    // Read fails after the switch — original symbol must still be restored.
     installCdpMocks({
       evaluate: async (expr) => {
         if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
         return { symbol: 'NASDAQ:NVDA' }; // no last/close → throws
       },
     });
-    const setSymbolCalls = [];
+    const switchCalls = [];
     await assert.rejects(
       data.getQuote({
         symbol: 'NVDA',
-        _deps: { setSymbol: async ({ symbol }) => { setSymbolCalls.push(symbol); } },
+        route: 'chart_switch',
+        _deps: {
+          setSymbol: async ({ symbol }) => { switchCalls.push(symbol); },
+          evaluateAsync: async () => ({ ok: true, status: 200, json: { data: [] } }),
+        },
       }),
       /Could not retrieve quote/,
     );
-    // Switched to NVDA, then restored TSLA in finally.
-    assert.deepEqual(setSymbolCalls, ['NVDA', 'NASDAQ:TSLA']);
+    assert.deepEqual(switchCalls, ['NVDA', 'NASDAQ:TSLA']);
+  });
+
+  it('test_getQuote_smoke_scannerHttpErrorSurfaces', async () => {
+    installCdpMocks({
+      evaluate: async (expr) => {
+        if (typeof expr === 'string' && /\.symbol\(\)\s*$/.test(expr)) return 'NASDAQ:TSLA';
+        return null;
+      },
+    });
+    await assert.rejects(
+      data.getQuote({
+        symbol: 'NVDA',
+        route: 'rest',
+        _deps: {
+          setSymbol: async () => {},
+          evaluateAsync: async () => ({ ok: false, status: 503, body: 'service unavailable' }),
+        },
+      }),
+      /scanner HTTP 503/,
+    );
   });
 
   it('test_getDepth_smoke', async () => {

@@ -577,6 +577,46 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
       assert.ok(r.last > 0 || r.close > 0, 'Has price');
     });
 
+    it('quote_get — cross-symbol via scanner REST does NOT disturb chart', async () => {
+      const original = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().symbol()`);
+      assert.ok(original, 'baseline chart symbol present');
+      const target = String(original).toUpperCase().includes('AAPL') ? 'NASDAQ:MSFT' : 'NASDAQ:AAPL';
+
+      const r = await coreData.getQuote({ symbol: target });
+      assert.equal(r.success, true);
+      const bare = (s) => String(s).split(':').pop().toUpperCase();
+      assert.equal(bare(r.symbol), bare(target), `quote returned for ${target}, got ${r.symbol}`);
+      assert.ok(r.last > 0 || r.close > 0, 'Has price');
+      // Default route is 'auto' → for US equities the scanner REST path wins.
+      assert.equal(r.source, 'scanner_rest', 'auto route used scanner for US equity');
+
+      const stillOn = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().symbol()`);
+      assert.equal(bare(stillOn), bare(original), 'chart was NOT disturbed by REST path');
+    });
+
+    it('quote_get — explicit chart_switch route reads + restores chart', async () => {
+      const original = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().symbol()`);
+      const target = String(original).toUpperCase().includes('AAPL') ? 'NASDAQ:MSFT' : 'NASDAQ:AAPL';
+
+      const r = await coreData.getQuote({ symbol: target, route: 'chart_switch' });
+      assert.equal(r.success, true);
+      assert.equal(r.source, 'chart_switch');
+      const bare = (s) => String(s).split(':').pop().toUpperCase();
+      assert.equal(bare(r.symbol), bare(target));
+      assert.ok(r.last > 0 || r.close > 0);
+
+      // Restored after the call.
+      const restored = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().symbol()`);
+      assert.equal(bare(restored), bare(original), 'chart restored after chart_switch');
+    });
+
+    it('quote_get — symbol matching active chart returns active_chart source', async () => {
+      const original = await evaluate(`window.TradingViewApi._activeChartWidgetWV.value()._chartWidget.model().mainSeries().symbol()`);
+      const r = await coreData.getQuote({ symbol: String(original) });
+      assert.equal(r.success, true);
+      assert.equal(r.source, 'active_chart');
+    });
+
     it('depth_get — DOM/order book (panel-dependent)', async () => {
       // depth_get requires the DOM panel to be open — test that the logic doesn't throw
       const data = await evaluate(`
