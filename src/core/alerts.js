@@ -1,196 +1,138 @@
 /**
  * Core alert logic.
  *
- * TV's alert dialog uses hashed CSS-module class names that change per release.
- * We locate elements by stable structural/text features instead of class names:
- *   - Dialog: find an element containing the text "Create alert on"
- *   - Price input: the <fieldset> whose <legend> reads "Value" contains the price input
- *   - Create/Cancel buttons: matched by textContent in the dialog footer
- *   - Message: a <button data-qa-id="alert-message-button"> opens a sub-dialog
+ * Both create() and deleteAlerts() POST to pricealerts.tradingview.com — the
+ * same endpoint list() already uses. Earlier versions of this file scraped
+ * the alert dialog via DOM/keystroke automation; that approach was brittle
+ * across TV UI revisions and locales, didn't return the assigned alert_id,
+ * and couldn't bulk-delete. The REST path is locale-proof and aligns with
+ * createIndicator() (Pine `alertcondition()` alerts).
+ *
+ * CORS gotcha: do NOT add a Content-Type header — a custom Content-Type
+ * triggers a preflight OPTIONS that pricealerts.tradingview.com rejects.
+ * We embed the body via JSON.stringify so it lands as a JS string literal.
  */
-import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, getClient as _getClient, safeString } from '../connection.js';
-
-const DIALOG_RE = '/Create alert on/i';
+import { evaluate as _evaluate, evaluateAsync as _evaluateAsync } from '../connection.js';
 
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
-    getClient: deps?.getClient || _getClient,
   };
 }
 
-async function openDialog({ evaluate, getClient }) {
-  // Try keyboard shortcut Alt+A first — most reliable across TV UI revisions.
-  const client = await getClient();
-  await client.Input.dispatchKeyEvent({
-    type: 'keyDown',
-    modifiers: 1, // Alt
-    key: 'a',
-    code: 'KeyA',
-    windowsVirtualKeyCode: 65,
-  });
-  await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'a', code: 'KeyA' });
-
-  // Poll for the dialog up to ~2s.
-  for (let i = 0; i < 20; i++) {
-    await new Promise(r => setTimeout(r, 100));
-    const found = await evaluate(`
-      (function() {
-        var els = document.querySelectorAll('[class*="dialog"]');
-        for (var i = 0; i < els.length; i++) {
-          if (${DIALOG_RE}.test(els[i].textContent || '')) return true;
-        }
-        return false;
-      })()
-    `);
-    if (found) return true;
-  }
-  return false;
+// Map user-friendly names to TV's internal alert condition types.
+//   cross       — fires on either direction
+//   cross_up    — fires only when price crosses up through the level
+//   cross_down  — fires only when price crosses down through the level
+function _normalizeCondition(condition) {
+  if (!condition) return 'cross';
+  const c = String(condition).toLowerCase().trim();
+  if (c === 'cross' || c === 'crossing') return 'cross';
+  if (c === 'greater_than' || c === 'above' || c === 'cross_above' || c === 'cross_up') return 'cross_up';
+  if (c === 'less_than' || c === 'below' || c === 'cross_below' || c === 'cross_down') return 'cross_down';
+  return 'cross';
 }
 
-export async function create({ condition, price, message, _deps }) {
-  const { evaluate, getClient } = _resolve(_deps);
-  const opened = await openDialog({ evaluate, getClient });
-  if (!opened) {
-    return { success: false, price, condition, message: message || '(none)', price_set: false, error: 'dialog_not_opened' };
+const PRICE_ALERT_DEFAULT_EXPIRATION_DAYS = 30;
+
+export async function create({ condition, price, message, _deps } = {}) {
+  const { evaluate, evaluateAsync } = _resolve(_deps);
+  if (price == null || isNaN(Number(price))) {
+    return { success: false, error: 'price is required and must be a number', source: 'rest_api' };
   }
+  const numericPrice = Number(price);
 
-  // Set the price in the "Value" fieldset's input.
-  const priceSet = await evaluate(`
+  const symbolInfo = await evaluate(`
     (function() {
-      var dialogs = document.querySelectorAll('[class*="dialog"]');
-      var dialog = null;
-      for (var i = 0; i < dialogs.length; i++) {
-        if (${DIALOG_RE}.test(dialogs[i].textContent || '')) { dialog = dialogs[i]; break; }
-      }
-      if (!dialog) return { ok: false, reason: 'no_dialog' };
-
-      var fieldsets = dialog.querySelectorAll('fieldset');
-      var target = null;
-      for (var i = 0; i < fieldsets.length; i++) {
-        var legend = fieldsets[i].querySelector('legend');
-        var text = (legend && legend.textContent || '').trim();
-        if (/^value$/i.test(text)) { target = fieldsets[i]; break; }
-      }
-      // Fallback: first fieldset containing a visible text/number input.
-      if (!target) {
-        for (var i = 0; i < fieldsets.length; i++) {
-          var inp = fieldsets[i].querySelector('input[type="text"], input[type="number"]');
-          if (inp && inp.offsetParent !== null) { target = fieldsets[i]; break; }
-        }
-      }
-      if (!target) return { ok: false, reason: 'no_value_fieldset' };
-
-      var input = target.querySelector('input[type="text"], input[type="number"]');
-      if (!input) return { ok: false, reason: 'no_input' };
-
-      var nativeSet = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      nativeSet.call(input, ${safeString(String(price))});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.blur();
-      return { ok: true, value: input.value };
+      try {
+        var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
+        var model = chart.model();
+        var sym = model.mainSeries().symbol();
+        var info = model.mainSeries().symbolInfo ? model.mainSeries().symbolInfo() : null;
+        return {
+          symbol: sym,
+          currency: (info && info.currency_code) || 'USD',
+          resolution: model.mainSeries().properties().interval.value() || '1'
+        };
+      } catch(e) { return { error: e.message }; }
     })()
   `);
-
-  // Optional: set message. The "Message" field is a button that opens a sub-dialog.
-  let messageSet = false;
-  if (message) {
-    const messageOpened = await evaluate(`
-      (function() {
-        var btn = document.querySelector('button[data-qa-id="alert-message-button"]');
-        if (!btn) return false;
-        btn.click();
-        return true;
-      })()
-    `);
-    if (messageOpened) {
-      // Wait for sub-dialog and its textarea/input to appear.
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 100));
-        const set = await evaluate(`
-          (function() {
-            var dialogs = document.querySelectorAll('[class*="dialog"]');
-            // The most recently opened dialog is typically last in DOM order.
-            for (var i = dialogs.length - 1; i >= 0; i--) {
-              var d = dialogs[i];
-              if (${DIALOG_RE}.test(d.textContent || '')) continue; // skip parent
-              var ta = d.querySelector('textarea');
-              if (ta && ta.offsetParent !== null) {
-                var nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-                nativeSet.call(ta, ${JSON.stringify(message)});
-                ta.dispatchEvent(new Event('input', { bubbles: true }));
-                ta.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-              }
-            }
-            return false;
-          })()
-        `);
-        if (set) { messageSet = true; break; }
-      }
-      // Close the sub-dialog by clicking its OK/Apply/Save button, or Escape fallback.
-      await new Promise(r => setTimeout(r, 100));
-      const closed = await evaluate(`
-        (function() {
-          var dialogs = document.querySelectorAll('[class*="dialog"]');
-          for (var i = dialogs.length - 1; i >= 0; i--) {
-            var d = dialogs[i];
-            if (${DIALOG_RE}.test(d.textContent || '')) continue;
-            var btns = d.querySelectorAll('button');
-            for (var j = 0; j < btns.length; j++) {
-              var t = (btns[j].textContent || '').trim();
-              if (/^(ok|apply|save|done)$/i.test(t)) { btns[j].click(); return true; }
-            }
-          }
-          return false;
-        })()
-      `);
-      if (!closed) {
-        const client = await getClient();
-        await client.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-        await client.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-      }
-      await new Promise(r => setTimeout(r, 200));
-    }
+  if (!symbolInfo || symbolInfo.error || !symbolInfo.symbol) {
+    return { success: false, error: 'Could not read active chart symbol: ' + (symbolInfo?.error || 'unknown'), source: 'rest_api' };
   }
 
-  // Click Create in the main dialog footer.
-  await new Promise(r => setTimeout(r, 300));
-  const created = await evaluate(`
-    (function() {
-      var dialogs = document.querySelectorAll('[class*="dialog"]');
-      var dialog = null;
-      for (var i = 0; i < dialogs.length; i++) {
-        if (${DIALOG_RE}.test(dialogs[i].textContent || '')) { dialog = dialogs[i]; break; }
-      }
-      if (!dialog) return false;
-      var btns = dialog.querySelectorAll('button');
-      // Prefer submit-typed button with text "Create".
-      for (var i = 0; i < btns.length; i++) {
-        var t = (btns[i].textContent || '').trim();
-        if (btns[i].type === 'submit' && /^create$/i.test(t)) { btns[i].click(); return true; }
-      }
-      for (var i = 0; i < btns.length; i++) {
-        var t = (btns[i].textContent || '').trim();
-        if (/^create$/i.test(t)) { btns[i].click(); return true; }
-      }
-      return false;
-    })()
+  const symbolMarker = '=' + JSON.stringify({
+    symbol: symbolInfo.symbol,
+    adjustment: 'dividends',
+    'currency-id': symbolInfo.currency,
+  });
+
+  const condType = _normalizeCondition(condition);
+  const bareTicker = String(symbolInfo.symbol).split(':').pop();
+  const defaultMessage = message || `${bareTicker} ${condition ? String(condition).toLowerCase() : 'crossing'} ${numericPrice}`;
+  const expiration = new Date(Date.now() + PRICE_ALERT_DEFAULT_EXPIRATION_DAYS * 86400 * 1000).toISOString();
+
+  const payload = {
+    symbol: symbolMarker,
+    resolution: String(symbolInfo.resolution || '1'),
+    message: defaultMessage,
+    sound_file: null,
+    sound_duration: 0,
+    popup: true,
+    expiration,
+    auto_deactivate: true,
+    email: false,
+    sms_over_email: false,
+    mobile_push: true,
+    web_hook: null,
+    name: null,
+    conditions: [{
+      type: condType,
+      frequency: 'on_first_fire',
+      series: [{ type: 'barset' }, { type: 'value', value: numericPrice }],
+      resolution: String(symbolInfo.resolution || '1'),
+    }],
+    active: true,
+    ignore_warnings: true,
+  };
+
+  const body = JSON.stringify({ payload });
+  const response = await evaluateAsync(`
+    fetch('https://pricealerts.tradingview.com/create_alert', {
+      method: 'POST',
+      credentials: 'include',
+      body: ${JSON.stringify(body)}
+    }).then(function(r) { return r.text().then(function(t) { return { status: r.status, body: t }; }); })
+      .catch(function(e) { return { error: e.message }; })
   `);
 
-  const ok = !!(created && priceSet && priceSet.ok);
+  if (!response || response.error) {
+    return { success: false, error: response?.error || 'no response', source: 'rest_api' };
+  }
+
+  let parsed = null;
+  try { parsed = JSON.parse(response.body); } catch { /* not JSON */ }
+
+  if (parsed?.s === 'ok' && parsed?.r) {
+    const created = parsed.r;
+    return {
+      success: true,
+      alert_id: created.alert_id || null,
+      symbol: symbolInfo.symbol,
+      price: numericPrice,
+      condition: condType,
+      message: defaultMessage,
+      expiration: created.expiration || expiration,
+      source: 'rest_api',
+    };
+  }
+
   return {
-    success: ok,
-    price,
-    condition,
-    message: message || '(none)',
-    price_set: !!(priceSet && priceSet.ok),
-    message_set: messageSet,
-    price_value: priceSet && priceSet.value,
-    error: ok ? undefined : (priceSet && priceSet.reason) || (!created ? 'create_button_not_found' : 'unknown'),
-    source: 'dom_fallback',
+    success: false,
+    error: parsed?.errmsg || parsed?.err?.code || (response.body ? String(response.body).substring(0, 200) : 'unknown'),
+    http_status: response.status,
+    source: 'rest_api',
   };
 }
 
@@ -226,24 +168,70 @@ export async function list({ _deps } = {}) {
   return { success: true, alert_count: result?.alerts?.length || 0, source: 'internal_api', alerts: result?.alerts || [], error: result?.error };
 }
 
-export async function deleteAlerts({ delete_all, _deps }) {
-  const { evaluate } = _resolve(_deps);
+/**
+ * Delete one or more alerts via TV's REST API.
+ *
+ *   POST https://pricealerts.tradingview.com/delete_alerts
+ *   Body: { payload: { alert_ids: [...] } }
+ *
+ * Accepts:
+ *   - { alert_id: 12345 }       — single
+ *   - { alert_ids: [1, 2, 3] }  — bulk in one call (TV supports natively)
+ *   - { delete_all: true }      — list() first, then delete every id
+ */
+export async function deleteAlerts({ alert_id, alert_ids, delete_all, _deps } = {}) {
+  const { evaluateAsync } = _resolve(_deps);
+  let ids = [];
+
   if (delete_all) {
-    const result = await evaluate(`
-      (function() {
-        var alertBtn = document.querySelector('[data-name="alerts"]');
-        if (alertBtn) alertBtn.click();
-        var header = document.querySelector('[data-name="alerts"]');
-        if (header) {
-          header.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 100, clientY: 100 }));
-          return { context_menu_opened: true };
-        }
-        return { context_menu_opened: false };
-      })()
-    `);
-    return { success: true, note: 'Alert deletion requires manual confirmation in the context menu.', context_menu_opened: result?.context_menu_opened || false, source: 'dom_fallback' };
+    const listed = await list({ _deps });
+    ids = (listed?.alerts || []).map(a => a.alert_id).filter(x => x != null);
+    if (ids.length === 0) {
+      return { success: true, deleted_count: 0, note: 'No alerts to delete', source: 'rest_api' };
+    }
+  } else if (Array.isArray(alert_ids) && alert_ids.length > 0) {
+    ids = alert_ids.map(Number).filter(x => !isNaN(x));
+  } else if (alert_id != null) {
+    const n = Number(alert_id);
+    if (isNaN(n)) throw new Error('alert_id must be a number');
+    ids = [n];
+  } else {
+    throw new Error('Pass one of: alert_id (number), alert_ids (array), or delete_all: true');
   }
-  throw new Error('Individual alert deletion not yet supported. Use delete_all: true.');
+
+  const body = JSON.stringify({ payload: { alert_ids: ids } });
+  const response = await evaluateAsync(`
+    fetch('https://pricealerts.tradingview.com/delete_alerts', {
+      method: 'POST',
+      credentials: 'include',
+      body: ${JSON.stringify(body)}
+    }).then(function(r) { return r.text().then(function(t) { return { status: r.status, body: t }; }); })
+      .catch(function(e) { return { error: e.message }; })
+  `);
+
+  if (!response || response.error) {
+    return { success: false, error: response?.error || 'no response', attempted_ids: ids, source: 'rest_api' };
+  }
+
+  let parsed = null;
+  try { parsed = JSON.parse(response.body); } catch { /* not JSON */ }
+
+  if (parsed?.s === 'ok') {
+    return {
+      success: true,
+      deleted_count: ids.length,
+      deleted_ids: ids,
+      source: 'rest_api',
+    };
+  }
+
+  return {
+    success: false,
+    error: parsed?.errmsg || parsed?.err?.code || (response.body ? String(response.body).substring(0, 200) : 'unknown'),
+    http_status: response.status,
+    attempted_ids: ids,
+    source: 'rest_api',
+  };
 }
 
 const INDICATOR_DEFAULT_EXPIRATION_DAYS = 30;

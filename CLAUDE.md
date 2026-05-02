@@ -76,10 +76,11 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `draw_clear` → remove all
 
 ### "Manage alerts"
-- `alert_create` → set price alert (condition: "crossing", "greater_than", "less_than")
-- `alert_create_indicator` → create alert that fires on a Pine `alertcondition()` signal (BUY/SELL → webhook). Posts directly to `pricealerts.tradingview.com/create_alert`. Needs `pine_id`, `alert_cond_id` (e.g. `plot_12`), `inputs`, `offsets_by_plot`. Discover the schema by creating one alert manually in the UI then reading it back via `alert_list`.
-- `alert_list` → view active alerts
-- `alert_delete` → remove alerts
+All four tools post to `pricealerts.tradingview.com` REST. No DOM scraping, no UI brittleness, returns real `alert_id`.
+- `alert_create` → price alert on the active chart symbol. `condition` accepts "crossing"/"greater_than"/"less_than" (and aliases like "above"/"cross_up"); normalized to TV's `cross`/`cross_up`/`cross_down`. Returns `alert_id`.
+- `alert_create_indicator` → fires on a Pine `alertcondition()` signal (BUY/SELL → webhook). Needs `pine_id`, `alert_cond_id` (e.g. `plot_12`), `inputs`, `offsets_by_plot`. Discover the schema by creating one alert manually in the UI, then reading it back via `alert_list`.
+- `alert_list` → view active alerts (with `alert_id`s).
+- `alert_delete` → pass `alert_id` for one, `alert_ids: [...]` for bulk in a single request, or `delete_all: true`.
 
 ### "Navigate the UI"
 - `ui_open_panel` → open/close pine-editor, strategy-tester, watchlist, alerts, trading

@@ -3,10 +3,10 @@ import { jsonResult } from './_format.js';
 import * as core from '../core/alerts.js';
 
 export function registerAlertTools(server) {
-  server.tool('alert_create', 'Create a price alert via the TradingView alert dialog', {
-    condition: z.string().describe('Alert condition (e.g., "crossing", "greater_than", "less_than")'),
+  server.tool('alert_create', 'Create a price alert on the active chart symbol via TradingView\'s REST API. Returns the assigned alert_id. Symbol/currency/resolution are inferred from the active chart.', {
+    condition: z.string().describe('Alert condition. "crossing" (any direction, default), "greater_than" / "above" / "cross_up" (price crosses upward), "less_than" / "below" / "cross_down" (price crosses downward).'),
     price: z.coerce.number().describe('Price level for the alert'),
-    message: z.string().optional().describe('Alert message'),
+    message: z.string().optional().describe('Alert message. Defaults to "<TICKER> <condition> <price>".'),
   }, async ({ condition, price, message }) => {
     try { return jsonResult(await core.create({ condition, price, message })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
@@ -17,10 +17,12 @@ export function registerAlertTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('alert_delete', 'Delete all alerts or open context menu for deletion', {
-    delete_all: z.coerce.boolean().optional().describe('Delete all alerts'),
-  }, async ({ delete_all }) => {
-    try { return jsonResult(await core.deleteAlerts({ delete_all })); }
+  server.tool('alert_delete', 'Delete one or more alerts via REST. Pass alert_id for one, alert_ids for bulk, or delete_all for everything.', {
+    alert_id: z.coerce.number().optional().describe('Single alert id to delete (from alert_list).'),
+    alert_ids: z.array(z.coerce.number()).optional().describe('Multiple alert ids to delete in one request.'),
+    delete_all: z.coerce.boolean().optional().describe('Delete every alert returned by alert_list.'),
+  }, async ({ alert_id, alert_ids, delete_all }) => {
+    try { return jsonResult(await core.deleteAlerts({ alert_id, alert_ids, delete_all })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

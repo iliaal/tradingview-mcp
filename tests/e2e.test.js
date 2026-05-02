@@ -1277,33 +1277,58 @@ val = array.get(a, 5)`;
 
   describe('Alerts', () => {
 
-    it('alert_create — find Create Alert button', async () => {
-      const found = await evaluate(`
-        !!(document.querySelector('[aria-label="Create Alert"]')
-          || document.querySelector('[data-name="alerts"]'))
-      `);
-      assert.ok(typeof found === 'boolean', 'Alert button detection works');
+    it('alert_list — REST endpoint returns array', async () => {
+      const r = await coreAlerts.list();
+      assert.equal(r.success, true);
+      assert.equal(r.source, 'internal_api');
+      assert.ok(Array.isArray(r.alerts), 'Returns alerts array');
     });
 
-    it('alert_list — scrape alert items', async () => {
-      const items = await evaluate(`
-        (function() {
-          var result = [];
-          var els = document.querySelectorAll('[class*="alert-item"], [class*="alertItem"], [class*="listItem"]');
-          els.forEach(function(item) {
-            var text = item.textContent.trim();
-            if (text) result.push(text.substring(0, 100));
-          });
-          return result;
-        })()
-      `);
-      assert.ok(Array.isArray(items), 'Alert list returned');
+    it('alert_create + alert_delete — REST round-trip', async () => {
+      // Pick a price far from current so the alert can't fire during the test.
+      const quote = await coreData.getQuote({});
+      const price = (quote.last || quote.close || 100) * 10;
+      assert.ok(price > 0, 'baseline price for far-away alert');
+
+      const created = await coreAlerts.create({
+        condition: 'crossing',
+        price,
+        message: 'mcp e2e test alert — safe to delete',
+      });
+      assert.equal(created.success, true, `create failed: ${JSON.stringify(created)}`);
+      assert.equal(created.source, 'rest_api');
+      assert.ok(created.alert_id != null, 'alert_id assigned');
+      assert.equal(created.condition, 'cross');
+
+      try {
+        // List should now contain our alert.
+        const listed = await coreAlerts.list();
+        assert.equal(listed.success, true);
+        const found = (listed.alerts || []).find(a => a.alert_id === created.alert_id);
+        assert.ok(found, `created alert ${created.alert_id} appears in list`);
+      } finally {
+        // Always clean up — even if the assertions above failed.
+        const deleted = await coreAlerts.deleteAlerts({ alert_id: created.alert_id });
+        assert.equal(deleted.success, true, `cleanup delete failed: ${JSON.stringify(deleted)}`);
+        assert.equal(deleted.deleted_count, 1);
+      }
     });
 
-    it('alert_delete — context menu access', async () => {
-      // Just verify the alerts button exists for context menu
-      const found = await evaluate(`!!document.querySelector('[data-name="alerts"]')`);
-      assert.ok(typeof found === 'boolean', 'Alerts button detection works');
+    it('alert_delete — bulk via alert_ids', async () => {
+      // Create two distant alerts, delete both in one call.
+      const quote = await coreData.getQuote({});
+      const base = (quote.last || quote.close || 100) * 10;
+      const a = await coreAlerts.create({ condition: 'crossing', price: base, message: 'mcp e2e bulk #1' });
+      const b = await coreAlerts.create({ condition: 'crossing', price: base + 1, message: 'mcp e2e bulk #2' });
+      assert.ok(a.success && b.success, 'both create calls succeeded');
+
+      const r = await coreAlerts.deleteAlerts({ alert_ids: [a.alert_id, b.alert_id] });
+      assert.equal(r.success, true, `bulk delete failed: ${JSON.stringify(r)}`);
+      assert.equal(r.deleted_count, 2);
+    });
+
+    it('alert_delete — invalid input throws', async () => {
+      await assert.rejects(coreAlerts.deleteAlerts({}), /Pass one of/);
     });
 
     it('alert_create_indicator — input validation rejects bad args', async () => {
