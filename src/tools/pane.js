@@ -50,6 +50,8 @@ export function registerPaneTools(server) {
       study_values:  boolish.optional().describe('Read current values from all visible indicators per pane.'),
       ohlcv_summary: z.union([boolish, z.object({ bars: z.coerce.number().optional() })]).optional().describe('Read compact OHLCV summary per pane. Pass { bars: N } to override default 20.'),
       drawings:      z.union([boolish, z.object({ with_properties: boolish.optional() })]).optional().describe('Read hand-drawn objects per pane.'),
+    }).refine((r) => Object.values(r).some((v) => v !== undefined), {
+      message: 'reads requires at least one of: pine_tables, pine_lines, pine_labels, pine_boxes, study_values, ohlcv_summary, drawings',
     }).describe('Which data types to read per pane. At least one must be set.'),
     wait_ms: z.coerce.number().optional().describe('Optional sleep before evaluation — insurance after layout/symbol mutations (max 5000).'),
   }, async ({ indices, reads, wait_ms }) => {

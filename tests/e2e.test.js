@@ -650,16 +650,18 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
     });
 
     it('depth_get — DOM/order book (panel-dependent)', async () => {
-      // depth_get requires the DOM panel to be open — test that the logic doesn't throw
-      const data = await evaluate(`
-        (function() {
-          var domPanel = document.querySelector('[class*="depth"]')
-            || document.querySelector('[class*="orderBook"]')
-            || document.querySelector('[data-name="dom"]');
-          return { panel_found: !!domPanel };
-        })()
-      `);
-      assert.ok(typeof data.panel_found === 'boolean', 'DOM detection works');
+      // depth_get throws a specific error when the DOM panel is closed
+      // (the common case in CI) and returns a numeric-level contract when
+      // it is open. Assert one of those two real outcomes, not a tautology.
+      try {
+        const r = await coreData.getDepth();
+        assert.equal(r.success, true, 'depth contract success');
+        assert.ok(typeof r.bid_levels === 'number', 'bid_levels is numeric');
+        assert.ok(typeof r.ask_levels === 'number', 'ask_levels is numeric');
+        assert.ok(Array.isArray(r.bids) && Array.isArray(r.asks), 'bids/asks arrays');
+      } catch (err) {
+        assert.match(err.message, /panel not found|Depth of Market/i, `expected panel-not-found, got: ${err.message}`);
+      }
     });
 
     it('data_get_strategy_results — strategy metrics (panel-dependent)', async () => {
@@ -668,14 +670,12 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
 
-      const data = await evaluate(`
-        (function() {
-          var panel = document.querySelector('[data-name="backtesting"]')
-            || document.querySelector('[class*="strategyReport"]');
-          return { panel_found: !!panel };
-        })()
-      `);
-      assert.ok(typeof data.panel_found === 'boolean', 'Strategy panel detection works');
+      // Exercise the real wrapper: it returns a stable contract whether or
+      // not a strategy is loaded (empty metrics + error on a bare chart).
+      const r = await coreData.getStrategyResults();
+      assert.equal(r.success, true, 'strategy results contract success');
+      assert.ok(typeof r.metric_count === 'number', 'metric_count is numeric');
+      assert.ok(r.metrics && typeof r.metrics === 'object', 'metrics is an object');
 
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
@@ -692,20 +692,20 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
     it('data_get_trades — trade list (panel-dependent)', async () => {
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
-      const panelExists = await evaluate(`
-        !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
-      `);
-      assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
+      const r = await coreData.getTrades();
+      assert.equal(r.success, true, 'trades contract success');
+      assert.ok(typeof r.trade_count === 'number', 'trade_count is numeric');
+      assert.ok(Array.isArray(r.trades), 'trades is an array');
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
     it('data_get_equity — equity curve (panel-dependent)', async () => {
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'open' }); } catch {}
       await sleep(500);
-      const panelExists = await evaluate(`
-        !!(document.querySelector('[data-name="backtesting"]') || document.querySelector('[class*="strategyReport"]'))
-      `);
-      assert.ok(typeof panelExists === 'boolean', 'Panel detection works');
+      const r = await coreData.getEquity();
+      assert.equal(r.success, true, 'equity contract success');
+      assert.ok(typeof r.data_points === 'number', 'data_points is numeric');
+      assert.ok(Array.isArray(r.data), 'data is an array');
       try { await coreUi.openPanel({ panel: 'strategy-tester', action: 'close' }); } catch {}
     });
 
@@ -923,56 +923,28 @@ describe('TradingView MCP — Full E2E (93 tools)', () => {
       assert.ok(bottomArea, 'Bottom area exists for script dropdown');
     });
 
-    it('pine_list_scripts — scrape dropdown items', async () => {
-      // Tests the same path as pine_open — dropdown scraping
-      const ready = await ensureEditor();
-      if (!ready) return;
-      // Just verify we can find the bottom area buttons
-      const btnCount = await evaluate(`
-        (function() {
-          var area = document.querySelector('[class*="layout__area--bottom"]');
-          return area ? area.querySelectorAll('button').length : 0;
-        })()
-      `);
-      assert.ok(btnCount >= 0, 'Button count retrieved');
+    it('pine_list_scripts — saved scripts from pine-facade', async () => {
+      // Read-only: lists the user's saved scripts via pine-facade REST.
+      const r = await corePine.listScripts();
+      assert.equal(r.success, true, 'list contract success');
+      assert.ok(typeof r.count === 'number', 'count is numeric');
+      assert.ok(Array.isArray(r.scripts), 'scripts is an array');
+      assert.equal(r.count, r.scripts.length, 'count matches scripts length');
     });
 
     it('pine_analyze — offline static analysis', async () => {
-      // This runs offline, no TradingView needed
-      // Test imported from pine_analyze.test.js pattern
+      // Runs offline. Exercise the real production analyze() rather than a
+      // re-implementation, so this test fails if the tool's logic regresses.
       const source = `//@version=6
 indicator("Test")
 a = array.from(1, 2, 3)
 val = array.get(a, 5)`;
 
-      // Inline the analysis logic (same as the tool)
-      const lines = source.split('\n');
-      const arrays = new Map();
-      const diagnostics = [];
-
-      for (let i = 0; i < lines.length; i++) {
-        const fromMatch = lines[i].match(/(\w+)\s*=\s*array\.from\(([^)]*)\)/);
-        if (fromMatch) {
-          const name = fromMatch[1].trim();
-          const args = fromMatch[2].trim();
-          arrays.set(name, { name, size: args === '' ? 0 : args.split(',').length, line: i + 1 });
-        }
-      }
-      for (let i = 0; i < lines.length; i++) {
-        const pattern = /array\.(get|set)\(\s*(\w+)\s*,\s*(-?\d+)/g;
-        let match;
-        while ((match = pattern.exec(lines[i])) !== null) {
-          const info = arrays.get(match[2]);
-          if (info && info.size !== null) {
-            const idx = parseInt(match[3], 10);
-            if (idx < 0 || idx >= info.size) {
-              diagnostics.push({ line: i + 1, message: `OOB index ${idx}`, severity: 'error' });
-            }
-          }
-        }
-      }
-      assert.equal(diagnostics.length, 1, 'Detected 1 OOB error');
-      assert.ok(diagnostics[0].message.includes('5'), 'Found index 5');
+      const r = corePine.analyze({ source });
+      assert.equal(r.success, true, 'analyze contract success');
+      assert.equal(r.diagnostics.length, 1, 'Detected 1 OOB error');
+      assert.equal(r.diagnostics[0].severity, 'error');
+      assert.ok(r.diagnostics[0].message.includes('5'), 'Found index 5');
     });
 
     it('pine_check — server-side compile via TradingView API', async () => {
@@ -1108,10 +1080,11 @@ val = array.get(a, 5)`;
     });
 
     it('ui_keyboard — dispatch key events', async () => {
-      // Press Escape — safe to dispatch
-      await Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-      await Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape' });
-      // No assertion needed — verifying it doesn't throw
+      // Exercise the wrapper (key mapping + dispatch), not raw CDP. Escape
+      // is safe to deliver to the chart.
+      const r = await coreUi.keyboard({ key: 'Escape' });
+      assert.equal(r.success, true, 'keyboard contract success');
+      assert.equal(r.key, 'Escape', 'echoes the dispatched key');
     });
 
     it('ui_type_text — insert text via CDP', async () => {
@@ -1136,20 +1109,15 @@ val = array.get(a, 5)`;
     });
 
     it('ui_scroll — dispatch mouseWheel event', async () => {
-      const center = await evaluate(`
-        (function() {
-          var el = document.querySelector('canvas');
-          if (!el) return { x: 500, y: 400 };
-          var rect = el.getBoundingClientRect();
-          return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-        })()
-      `);
-      await Input.dispatchMouseEvent({ type: 'mouseWheel', x: center.x, y: center.y, deltaX: 0, deltaY: 100 });
-      // No assertion — verifying no throw
+      // Exercise the wrapper (resolves the chart canvas + dispatches wheel).
+      const r = await coreUi.scroll({ direction: 'down', amount: 100 });
+      assert.equal(r.success, true, 'scroll contract success');
+      assert.equal(r.direction, 'down', 'echoes direction');
+      assert.equal(r.amount, 100, 'echoes amount');
     });
 
     it('ui_mouse_click — click at coordinates', async () => {
-      // Click in the middle of the chart (safe area)
+      // Click in the middle of the chart (safe area) via the wrapper.
       const center = await evaluate(`
         (function() {
           var el = document.querySelector('canvas');
@@ -1158,9 +1126,9 @@ val = array.get(a, 5)`;
           return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
         })()
       `);
-      await Input.dispatchMouseEvent({ type: 'mouseMoved', x: center.x, y: center.y });
-      await Input.dispatchMouseEvent({ type: 'mousePressed', x: center.x, y: center.y, button: 'left', clickCount: 1 });
-      await Input.dispatchMouseEvent({ type: 'mouseReleased', x: center.x, y: center.y, button: 'left' });
+      const r = await coreUi.mouseClick({ x: center.x, y: center.y });
+      assert.equal(r.success, true, 'mouseClick contract success');
+      assert.equal(r.button, 'left', 'defaults to left button');
     });
 
     it('ui_find_element — search by text', async () => {
@@ -1210,12 +1178,13 @@ val = array.get(a, 5)`;
       }
     });
 
-    it('layout_list — find layout dropdown button', async () => {
-      const found = await evaluate(`
-        !!(document.querySelector('[data-name="save-load-menu"]')
-          || document.querySelector('[aria-label="Manage layouts"]'))
-      `);
-      assert.ok(typeof found === 'boolean', 'Layout button detection works');
+    it('layout_list — saved layouts from internal API', async () => {
+      // Read-only: lists saved chart layouts via getSavedCharts.
+      const r = await coreUi.layoutList();
+      assert.equal(r.success, true, 'layout list contract success');
+      assert.ok(typeof r.layout_count === 'number', 'layout_count is numeric');
+      assert.ok(Array.isArray(r.layouts), 'layouts is an array');
+      assert.equal(r.layout_count, r.layouts.length, 'count matches layouts length');
     });
 
     it('layout_switch — layout dropdown access', async () => {

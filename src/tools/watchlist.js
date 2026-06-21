@@ -33,7 +33,7 @@ export function registerWatchlistTools(server) {
         const { getClient } = await import('../connection.js');
         const c = await getClient();
         await c.Input.dispatchKeyEvent({ type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-        await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape' });
+        await c.Input.dispatchKeyEvent({ type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       } catch {}
       return jsonResult({ success: false, error: err.message }, true);
     }
