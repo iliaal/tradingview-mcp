@@ -6,3 +6,5 @@ temp_*
 discovery-log.json
 .claude/
 .plan/
+# Local project-scoped MCP config (may hold machine-specific server paths)
+.mcp.json
