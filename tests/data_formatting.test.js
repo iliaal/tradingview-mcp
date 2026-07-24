@@ -5,7 +5,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { getPineLines, getPineBoxes, getOhlcv } from '../src/core/data.js';
+import { getPineLines, getPineBoxes, getOhlcv, getStudyValues } from '../src/core/data.js';
 
 describe('price rounding preserves sub-cent levels (8 dp)', () => {
   it('getPineLines keeps a 5-dp horizontal level instead of flattening to 0.00', async () => {
@@ -47,5 +47,17 @@ describe('price rounding preserves sub-cent levels (8 dp)', () => {
     assert.equal(r.range, 0.0004);  // 0.0026 - 0.0022
     assert.equal(r.change, 0.00025); // 0.00255 - 0.0023
     assert.ok(r.range > 0 && r.change > 0);
+  });
+});
+
+describe('getStudyValues clears the crosshair before reading (stale-value bug)', () => {
+  it('wires a mouseleave crosshair-clear into the query, then still reads dataWindowView', async () => {
+    let expr = '';
+    const r = await getStudyValues({ _deps: { evaluate: async (e) => { expr = e; return []; } } });
+    assert.match(expr, /mouseleave/);       // crosshair cleared...
+    assert.match(expr, /dataWindowView/);   // ...before values are read
+    // the clear precedes the read in the emitted query
+    assert.ok(expr.indexOf('mouseleave') < expr.indexOf('dataWindowView'));
+    assert.equal(r.success, true);
   });
 });

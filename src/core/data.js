@@ -13,6 +13,17 @@ const _sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // figure. 8 dp preserves those without expanding normal equity prices.
 const roundPrice = n => (typeof n === 'number' && isFinite(n) ? Math.round(n * 1e8) / 1e8 : null);
 
+// s.dataWindowView() returns study values AT THE CROSSHAIR position, so a cursor
+// left on an old bar yields stale RSI/EMA/etc. reads. Dispatch mouseleave on the
+// pane canvas first to snap the crosshair back to the latest confirmed bar. DOM
+// event handlers run synchronously, so a dataWindowView() read right after
+// reflects the cleared state. Ported from ceesar93 fork (5995b0d).
+const CLEAR_CROSSHAIR_JS = `
+      try {
+        var __xhairPane = document.querySelector('[data-name="pane-canvas"]') || document.querySelector('canvas');
+        if (__xhairPane) __xhairPane.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true, cancelable: true }));
+      } catch (e) {}`;
+
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
@@ -725,7 +736,7 @@ export async function getStudyValues({ study_filter, _deps } = {}) {
   const data = await evaluate(`
     (function() {
       var chart = window.TradingViewApi._activeChartWidgetWV.value()._chartWidget;
-      var model = chart.model();
+      var model = chart.model();${CLEAR_CROSSHAIR_JS}
       var sources = model.model().dataSources();
       var results = [];
       var filter = ${safeString(filter)};
@@ -1106,7 +1117,7 @@ export async function batchReadPanes({ indices, reads, wait_ms, _deps } = {}) {
   const ohlcvBars    = Math.min(Math.max(Number(reads.ohlcv_summary?.bars) || 20, 2), 500);
 
   const expression = `
-    (function() {
+    (function() {${wantStudyValues ? CLEAR_CROSSHAIR_JS : ''}
       var cwc = window.TradingViewApi._chartWidgetCollection;
       var all = cwc.getAll();
       var layoutType = cwc._layoutType;
