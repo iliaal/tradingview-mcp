@@ -152,6 +152,24 @@ Replace `/path/to/tradingview-mcp` with your actual path.
 
 Ask Claude: *"Use tv_health_check to verify TradingView is connected"*
 
+### Disabling tool groups
+
+Set `TV_DISABLED_TOOLS` (comma-separated group names) to skip registering tool groups at startup — handy for locked-down deployments that want to drop the only tools reaching third-party hosts. Configure it straight from the client's `.mcp.json` `env` block, alongside `TV_CDP_HOST` / `TV_CDP_PORT` / `TV_MCP_TARGET_FILTER`:
+
+```json
+{
+  "mcpServers": {
+    "tradingview": {
+      "command": "node",
+      "args": ["/path/to/tradingview-mcp/src/server.js"],
+      "env": { "TV_DISABLED_TOOLS": "news" }
+    }
+  }
+}
+```
+
+Default (unset) registers every group — no behavior change. Valid group names: `health, chart, pine, data, capture, drawing, alerts, batch, replay, indicators, watchlist, ui, pane, tab, hotlist, strategy, news, screener, pine-deploy, pine-publish`. Unknown names are ignored with a stderr warning. Disabled groups are logged to stderr at startup.
+
 ## 💻 CLI
 
 Every MCP tool is also accessible as a `tv` CLI command. All output is JSON for piping with `jq`.
@@ -282,6 +300,8 @@ Read backtest results from a Pine Script strategy on the chart. The Strategy Tes
 |------|-------------|
 | `news_get_ticker` | Latest ticker-specific headlines (Nasdaq + Yahoo Finance RSS) with keyword sentiment scoring. Index symbols (SPX, NDX, DJI, RUT, VIX) auto-route to their tracking ETF |
 | `signal_get_snapshot` | Compact one-shot bundle: quote + 100-bar price action (SMA20/50, ATR14, %change) + volume-vs-avg + visible indicator values + latest news with sentiment. Sections degrade gracefully |
+
+> **Egress note:** `news_get_ticker` / `signal_get_snapshot` are the only tools that reach third-party hosts (`www.nasdaq.com`, `feeds.finance.yahoo.com`); everything else talks only to the local CDP endpoint and `*.tradingview.com`. In a locked-down deployment you can disable them without editing source — see [Disabling tool groups](#disabling-tool-groups).
 
 ### Screener
 

@@ -1,25 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { registerHealthTools } from './tools/health.js';
-import { registerChartTools } from './tools/chart.js';
-import { registerPineTools } from './tools/pine.js';
-import { registerDataTools } from './tools/data.js';
-import { registerCaptureTools } from './tools/capture.js';
-import { registerDrawingTools } from './tools/drawing.js';
-import { registerAlertTools } from './tools/alerts.js';
-import { registerBatchTools } from './tools/batch.js';
-import { registerReplayTools } from './tools/replay.js';
-import { registerIndicatorTools } from './tools/indicators.js';
-import { registerWatchlistTools } from './tools/watchlist.js';
-import { registerUiTools } from './tools/ui.js';
-import { registerPaneTools } from './tools/pane.js';
-import { registerTabTools } from './tools/tab.js';
-import { registerHotlistTools } from './tools/hotlist.js';
-import { registerStrategyTools } from './tools/strategy.js';
-import { registerNewsTools } from './tools/news.js';
-import { registerScreenerTools } from './tools/screener.js';
-import { registerPineDeployTools } from './tools/pine-deploy.js';
-import { registerPinePublishTools } from './tools/pine-publish.js';
+import { registerEnabledTools, TOOL_GROUPS } from './tools/registry.js';
 
 const server = new McpServer(
   {
@@ -75,31 +56,20 @@ CONTEXT MANAGEMENT:
   }
 );
 
-// Register all tool groups
-registerHealthTools(server);
-registerChartTools(server);
-registerPineTools(server);
-registerDataTools(server);
-registerCaptureTools(server);
-registerDrawingTools(server);
-registerAlertTools(server);
-registerBatchTools(server);
-registerReplayTools(server);
-registerIndicatorTools(server);
-registerWatchlistTools(server);
-registerUiTools(server);
-registerPaneTools(server);
-registerTabTools(server);
-registerHotlistTools(server);
-registerStrategyTools(server);
-registerNewsTools(server);
-registerScreenerTools(server);
-registerPineDeployTools(server);
-registerPinePublishTools(server);
+// Register all tool groups, honoring TV_DISABLED_TOOLS (comma-separated group
+// names). Default empty → every group registers. See src/tools/registry.js.
+const { disabled: disabledGroups, unknown: unknownGroups } = registerEnabledTools(server);
 
 // Startup notice (stderr so it doesn't interfere with MCP stdio protocol)
 process.stderr.write('⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.\n');
-process.stderr.write('   Ensure your usage complies with TradingView\'s Terms of Use.\n\n');
+process.stderr.write('   Ensure your usage complies with TradingView\'s Terms of Use.\n');
+if (disabledGroups.length) {
+  process.stderr.write(`   Disabled tool groups (TV_DISABLED_TOOLS): ${disabledGroups.join(', ')}\n`);
+}
+if (unknownGroups.length) {
+  process.stderr.write(`   ⚠ Unknown TV_DISABLED_TOOLS names ignored: ${unknownGroups.join(', ')}. Valid: ${Object.keys(TOOL_GROUPS).join(', ')}\n`);
+}
+process.stderr.write('\n');
 
 // Graceful shutdown: when the MCP host (Claude Code, Tauri sidecar, etc.)
 // kills us via SIGTERM, dev Ctrl-C sends SIGINT, or stdin EOF when the
