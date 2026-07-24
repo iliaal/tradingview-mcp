@@ -4,6 +4,11 @@
 
 PORT="${1:-9222}"
 
+# VS Code / Cursor integrated terminals export ELECTRON_RUN_AS_NODE=1, which makes
+# TradingView (an Electron app) boot headless-as-Node with no debug port. Strip it so
+# this script also works from an editor-integrated shell.
+unset ELECTRON_RUN_AS_NODE ELECTRON_NO_ATTACH_CONSOLE
+
 # Auto-detect TradingView install location
 APP=""
 LOCATIONS=(

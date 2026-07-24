@@ -38,9 +38,16 @@ jobs:
           UPSTREAM_MSG=$(gh api repos/$UPSTREAM/commits/main --jq '.commit.message | split("\n")[0]')
           UPSTREAM_DATE=$(gh api repos/$UPSTREAM/commits/main --jq '.commit.committer.date')
 
-          # Get our fork's merge base (last time we synced with upstream)
-          FORK_BASE=$(gh api repos/$FORK/compare/main...$(gh api repos/$UPSTREAM/commits/main --jq '.sha') \
-            --jq '.behind_by' 2>/dev/null || echo "unknown")
+          # How many upstream commits our fork is missing. Cross-fork compare
+          # within the shared fork network: base = our default branch (master),
+          # head = upstream's default branch (main). ahead_by = commits in the
+          # head not in the base = the commits we're behind.
+          # Two bugs this replaces: (1) base ref was `main`, but our default
+          # branch is `master` -> 404; (2) `gh api` writes the 404 body to
+          # STDOUT, so `2>/dev/null || echo unknown` concatenated the raw JSON
+          # error with "unknown". Validate the result is numeric instead.
+          FORK_BASE=$(gh api "repos/$FORK/compare/master...${UPSTREAM%%/*}:main" --jq '.ahead_by' 2>/dev/null)
+          [[ "$FORK_BASE" =~ ^[0-9]+$ ]] || FORK_BASE="unknown"
 
           echo "pr_count=$PR_COUNT" >> $GITHUB_OUTPUT
           echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT

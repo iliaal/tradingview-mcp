@@ -35,20 +35,32 @@ function isWsl() {
 function findMsixTradingView({ wsl = false } = {}) {
   try {
     const psBin = wsl ? 'powershell.exe' : 'powershell';
+    // The MSIX package Name is publisher-prefixed (e.g.
+    // "31178TradingViewInc.TradingView"), not the bare "TradingView.Desktop",
+    // so an exact -Name match silently finds nothing on real Store installs.
+    // Match on a "*TradingView*" wildcard instead. This can return multiple
+    // InstallLocations — pick the first whose folder actually holds
+    // TradingView.exe (done JS-side below). Deliberately no `$_` in the
+    // PowerShell: under WSL this string is parsed by /bin/sh first, which
+    // would expand `$_` before powershell.exe ever sees it.
     const out = execSync(
-      `${psBin} -NoProfile -Command "Get-AppxPackage -Name TradingView.Desktop | Select-Object -ExpandProperty InstallLocation"`,
+      `${psBin} -NoProfile -Command "Get-AppxPackage *TradingView* | Select-Object -ExpandProperty InstallLocation"`,
       { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
     ).toString().trim();
     if (!out) return null;
-    const winPath = `${out}\\TradingView.exe`;
-    if (!wsl) {
-      return existsSync(winPath) ? winPath : null;
+    for (const dir of out.split(/\r?\n/).map(s => s.trim()).filter(Boolean)) {
+      const winPath = `${dir}\\TradingView.exe`;
+      if (!wsl) {
+        if (existsSync(winPath)) return winPath;
+        continue;
+      }
+      // WSL: convert C:\Foo\Bar to /mnt/c/Foo/Bar to verify existence.
+      const linuxPath = winPath
+        .replace(/^([A-Za-z]):/, (_m, d) => `/mnt/${d.toLowerCase()}`)
+        .replace(/\\/g, '/');
+      if (existsSync(linuxPath)) return winPath;
     }
-    // WSL: convert C:\Foo\Bar to /mnt/c/Foo/Bar to verify existence.
-    const linuxPath = winPath
-      .replace(/^([A-Za-z]):/, (_m, d) => `/mnt/${d.toLowerCase()}`)
-      .replace(/\\/g, '/');
-    return existsSync(linuxPath) ? winPath : null;
+    return null;
   } catch {
     return null;
   }
@@ -300,7 +312,7 @@ export async function launch({ port, kill_existing } = {}) {
   }
 
   if (!tvPath) {
-    throw new Error(`TradingView not found on ${wsl ? 'wsl' : platform}. Searched: ${candidates.join(', ')}${(platform === 'win32' || wsl) ? ', plus MSIX (Get-AppxPackage TradingView.Desktop)' : ''}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
+    throw new Error(`TradingView not found on ${wsl ? 'wsl' : platform}. Searched: ${candidates.join(', ')}${(platform === 'win32' || wsl) ? ', plus MSIX (Get-AppxPackage *TradingView*)' : ''}. Launch manually with: /path/to/TradingView --remote-debugging-port=${cdpPort}`);
   }
 
   if (killFirst) {
@@ -320,6 +332,16 @@ export async function launch({ port, kill_existing } = {}) {
     } catch { /* may not be running */ }
   }
 
+  // VS Code / Cursor extension hosts export ELECTRON_RUN_AS_NODE=1 into every
+  // child process. TradingView Desktop is itself an Electron app, so inheriting
+  // that var makes it boot headless-as-Node: no window opens and
+  // --remote-debugging-port is ignored, so CDP never binds. Strip it (and its
+  // console companion) from the launch env so the GUI comes up normally no
+  // matter what spawned the MCP server.
+  const launchEnv = { ...process.env };
+  delete launchEnv.ELECTRON_RUN_AS_NODE;
+  delete launchEnv.ELECTRON_NO_ATTACH_CONSOLE;
+
   // WSL: launch via PowerShell from the Windows side. cmd.exe + UNC path
   // refuses to run when WSL's working dir is the cwd, so we shell into the
   // user's Windows home directory first. Start-Process detaches cleanly.
@@ -331,14 +353,14 @@ export async function launch({ port, kill_existing } = {}) {
     // form of single-quote escaping for safeString() use cases.
     const psQuoted = tvPath.split("'").join("''");
     const psCmd = `Set-Location $env:USERPROFILE; Start-Process -FilePath '${psQuoted}' -ArgumentList '--remote-debugging-port=${cdpPort}'`;
-    child = spawn('powershell.exe', ['-NoProfile', '-Command', psCmd], { detached: true, stdio: 'ignore' });
+    child = spawn('powershell.exe', ['-NoProfile', '-Command', psCmd], { detached: true, stdio: 'ignore', env: launchEnv });
     child.unref();
   } else {
     // Try direct spawn first. On TradingView v2.14.0+ (Electron 38 / Node 22),
     // direct invocation may reject --remote-debugging-port as an unknown CLI
     // flag before Chromium can process it. We watch stderr + exit for a short
     // window and fall back to a platform-specific path when that happens.
-    child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], { detached: true, stdio: ['ignore', 'ignore', 'pipe'], env: launchEnv });
     const spawnFailed = await new Promise((resolve) => {
       let settled = false;
       const settle = (val) => { if (!settled) { settled = true; resolve(val); } };
@@ -373,7 +395,7 @@ export async function launch({ port, kill_existing } = {}) {
             execFileSync('open', ['-a', appBundle, '--args', `--remote-debugging-port=${cdpPort}`], { timeout: 5000, stdio: 'ignore' });
           } catch { /* open returns non-zero even on success sometimes */ }
         } else {
-          child = spawn(tvPath, [], { detached: true, stdio: 'ignore' });
+          child = spawn(tvPath, [], { detached: true, stdio: 'ignore', env: launchEnv });
           child.unref();
         }
       } else {
@@ -381,7 +403,7 @@ export async function launch({ port, kill_existing } = {}) {
         // accepts the flag via env even when CLI parsing rejects it.
         child = spawn(tvPath, [`--remote-debugging-port=${cdpPort}`], {
           detached: true, stdio: 'ignore',
-          env: { ...process.env, REMOTE_DEBUGGING_PORT: String(cdpPort) },
+          env: { ...launchEnv, REMOTE_DEBUGGING_PORT: String(cdpPort) },
         });
         child.unref();
       }
