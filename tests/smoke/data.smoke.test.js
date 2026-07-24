@@ -580,20 +580,33 @@ describe('core/data.js — smoke', () => {
     assert.equal(r.panes[0].pine_lines[0].total_lines, 3);
   });
 
-  it('test_batchReadPanes_smoke_caps_wait_ms', async () => {
-    let evaluateCalled = false;
-    installCdpMocks({
-      evaluate: async () => {
-        evaluateCalled = true;
-        return { layout: 's', pane_count: 1, panes: [] };
+  it('test_batchReadPanes_smoke_waits_before_evaluation', async () => {
+    const events = [];
+    await data.batchReadPanes({
+      reads: { study_values: true },
+      wait_ms: 100,
+      _deps: {
+        sleep: async ms => events.push(`sleep:${ms}`),
+        evaluate: async () => {
+          events.push('evaluate');
+          return { layout: 's', pane_count: 1, panes: [] };
+        },
       },
     });
-    const start = Date.now();
-    await data.batchReadPanes({ reads: { study_values: true }, wait_ms: 100 });
-    const elapsed = Date.now() - start;
-    assert.ok(evaluateCalled);
-    assert.ok(elapsed >= 100, `waited at least 100ms (got ${elapsed}ms)`);
-    // Cap test would require waiting 5s+, skipping for fast suite.
+    assert.deepEqual(events, ['sleep:100', 'evaluate']);
+  });
+
+  it('test_batchReadPanes_smoke_caps_wait_ms', async () => {
+    let scheduledDelay;
+    await data.batchReadPanes({
+      reads: { study_values: true },
+      wait_ms: 6000,
+      _deps: {
+        sleep: async ms => { scheduledDelay = ms; },
+        evaluate: async () => ({ layout: 's', pane_count: 1, panes: [] }),
+      },
+    });
+    assert.equal(scheduledDelay, 5000);
   });
 
   // Regression: batchReadPanes' readGraphics must unwrap WatchableValue with
