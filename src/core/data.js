@@ -6,11 +6,14 @@ import { setTimeframe as _setTimeframe, setSymbol as _setSymbol } from './chart.
 import { waitForChartReady as _waitForChartReady } from '../wait.js';
 import { detectPatternsInBars, KNOWN_PATTERNS } from './patterns.js';
 
+const _sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
     evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     setSymbol: deps?.setSymbol || _setSymbol,
+    sleep: deps?.sleep || _sleep,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
   };
 }
@@ -1068,14 +1071,14 @@ function formatPineBoxes(raw, verbose) {
 }
 
 export async function batchReadPanes({ indices, reads, wait_ms, _deps } = {}) {
-  const { evaluate } = _resolve(_deps);
+  const { evaluate, sleep } = _resolve(_deps);
   if (!reads || typeof reads !== 'object') throw new Error('batchReadPanes: `reads` is required');
 
   const idxArg = Array.isArray(indices) && indices.length > 0
     ? JSON.stringify(indices.map(Number))
     : 'null';
   const waitMs = Number(wait_ms) > 0 ? Math.min(Number(wait_ms), 5000) : 0;
-  if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+  if (waitMs > 0) await sleep(waitMs);
 
   const wantTables      = !!reads.pine_tables;
   const wantLines       = !!reads.pine_lines;
