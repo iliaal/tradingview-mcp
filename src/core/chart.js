@@ -454,18 +454,58 @@ export async function manageIndicator({ action, indicator, entity_id, inputs: in
       return await _addUserScript({ id: indicator, _deps });
     }
 
-    const inputArr = inputs ? Object.entries(inputs).map(([k, v]) => ({ id: k, value: v })) : [];
     const before = await evaluate(`${CHART_API}.getAllStudies().map(function(s) { return s.id; })`);
     await evaluate(`
       (function() {
         var chart = ${CHART_API};
-        chart.createStudy(${safeString(indicator)}, false, false, ${JSON.stringify(inputArr)});
+        chart.createStudy(${safeString(indicator)}, false, false, []);
       })()
     `);
     await new Promise(r => setTimeout(r, 1500));
     const after = await evaluate(`${CHART_API}.getAllStudies().map(function(s) { return s.id; })`);
     const newIds = (after || []).filter(id => !(before || []).includes(id));
-    return { success: newIds.length > 0, action: 'add', indicator, entity_id: newIds[0] || null, new_study_count: newIds.length };
+    const entityId = newIds[0] || null;
+
+    // createStudy's 4th arg (input values) is unreliable across TradingView
+    // builds (#249): the study is created with defaults regardless. Apply
+    // overrides afterward via the study's own getInputValues/setInputValues
+    // (the same API indicator_set_inputs uses), then read back to report what
+    // actually took. Unknown keys are surfaced instead of silently dropped.
+    let appliedInputs;
+    if (entityId && inputs && Object.keys(inputs).length) {
+      const result = await evaluate(`
+        (function() {
+          var chart = ${CHART_API};
+          var study = chart.getStudyById(${safeString(entityId)});
+          if (!study || typeof study.getInputValues !== 'function') return { error: 'inputs unsupported for this study' };
+          var current = study.getInputValues();
+          var overrides = ${JSON.stringify(inputs)};
+          var applied = {}, unknown = [];
+          var byId = {};
+          for (var i = 0; i < current.length; i++) byId[current[i].id] = true;
+          for (var k in overrides) {
+            if (byId[k]) { for (var j = 0; j < current.length; j++) { if (current[j].id === k) current[j].value = overrides[k]; } applied[k] = overrides[k]; }
+            else unknown.push(k);
+          }
+          study.setInputValues(current);
+          var after = study.getInputValues();
+          var confirmed = {};
+          for (var m = 0; m < after.length; m++) { if (applied.hasOwnProperty(after[m].id)) confirmed[after[m].id] = after[m].value; }
+          return { confirmed: confirmed, unknown: unknown };
+        })()
+      `);
+      if (result?.error) appliedInputs = { error: result.error };
+      else appliedInputs = { applied: result?.confirmed || {}, ...(result?.unknown?.length && { unknown_inputs: result.unknown }) };
+    }
+
+    return {
+      success: newIds.length > 0,
+      action: 'add',
+      indicator,
+      entity_id: entityId,
+      new_study_count: newIds.length,
+      ...(appliedInputs && { inputs: appliedInputs }),
+    };
   } else if (action === 'remove') {
     if (!entity_id) throw new Error('entity_id required for remove action. Use chart_get_state to find study IDs.');
     await evaluate(`

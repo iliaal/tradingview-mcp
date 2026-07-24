@@ -8,6 +8,11 @@ import { detectPatternsInBars, KNOWN_PATTERNS } from './patterns.js';
 
 const _sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// Round a price to 8 dp. Plain 2-dp rounding flattens sub-cent forex/crypto
+// levels (e.g. an XRP or SHIB price, a 5-dp FX pair) to 0.00 or a wrong
+// figure. 8 dp preserves those without expanding normal equity prices.
+const roundPrice = n => (typeof n === 'number' && isFinite(n) ? Math.round(n * 1e8) / 1e8 : null);
+
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
@@ -185,8 +190,8 @@ function _formatOhlcv({ data, summary }) {
       period: { from: first.time, to: last.time },
       open: first.open, close: last.close,
       high: Math.max(...highs), low: Math.min(...lows),
-      range: Math.round((Math.max(...highs) - Math.min(...lows)) * 100) / 100,
-      change: Math.round((last.close - first.open) * 100) / 100,
+      range: roundPrice(Math.max(...highs) - Math.min(...lows)),
+      change: roundPrice(last.close - first.open),
       change_pct: first.open ? Math.round(((last.close - first.open) / first.open) * 10000) / 100 + '%' : 'n/a',
       avg_volume: Math.round(volumes.reduce((a, b) => a + b, 0) / volumes.length),
       last_5_bars: bars.slice(-5),
@@ -745,7 +750,13 @@ export async function getStudyValues({ study_filter, _deps } = {}) {
               }
             }
           } catch(e) {}
-          if (Object.keys(values).length > 0) results.push({ name: name, values: values });
+          // Include id + inputs so multiple instances of the same indicator
+          // (e.g. two EMAs of different lengths) are tellable apart (#143).
+          var id = null;
+          try { id = s.id ? s.id() : null; } catch(e) {}
+          var inputs = null;
+          try { var ip = s.inputs ? s.inputs() : null; if (ip && Object.keys(ip).length) inputs = ip; } catch(e) {}
+          if (Object.keys(values).length > 0) results.push({ id: id, name: name, inputs: inputs, values: values });
         } catch(e) {}
       }
       return results;
@@ -766,8 +777,8 @@ export async function getPineLines({ study_filter, verbose, include_empty, _deps
     const allLines = [];
     for (const item of s.items) {
       const v = item.raw;
-      const y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
-      const y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
+      const y1 = v.y1 != null ? roundPrice(v.y1) : null;
+      const y2 = v.y2 != null ? roundPrice(v.y2) : null;
       if (verbose) allLines.push({ id: item.id, y1, y2, x1: v.x1, x2: v.x2, horizontal: v.y1 === v.y2, style: v.st, width: v.w, color: v.ci });
       if (y1 != null && v.y1 === v.y2 && !seen[y1]) { hLevels.push(y1); seen[y1] = true; }
     }
@@ -953,9 +964,9 @@ export async function getPineBoxes({ study_filter, verbose, include_empty, _deps
     const allBoxes = [];
     for (const item of s.items) {
       const v = item.raw;
-      const high = v.y1 != null && v.y2 != null ? Math.round(Math.max(v.y1, v.y2) * 100) / 100 : null;
-      const low = v.y1 != null && v.y2 != null ? Math.round(Math.min(v.y1, v.y2) * 100) / 100 : null;
-      if (verbose) allBoxes.push({ id: item.id, high, low, x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
+      const high = v.y1 != null && v.y2 != null ? roundPrice(Math.max(v.y1, v.y2)) : null;
+      const low = v.y1 != null && v.y2 != null ? roundPrice(Math.min(v.y1, v.y2)) : null;
+      if (verbose) allBoxes.push({ id: item.id, high, low, text: v.t || '', x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
       if (high != null && low != null) { const key = high + ':' + low; if (!seen[key]) { zones.push({ high, low }); seen[key] = true; } }
     }
     zones.sort((a, b) => b.high - a.high);
@@ -981,8 +992,8 @@ function formatPineLines(raw, verbose) {
     const allLines = [];
     for (const item of s.items) {
       const v = item.raw;
-      const y1 = v.y1 != null ? Math.round(v.y1 * 100) / 100 : null;
-      const y2 = v.y2 != null ? Math.round(v.y2 * 100) / 100 : null;
+      const y1 = v.y1 != null ? roundPrice(v.y1) : null;
+      const y2 = v.y2 != null ? roundPrice(v.y2) : null;
       if (verbose) allLines.push({ id: item.id, y1, y2, x1: v.x1, x2: v.x2, horizontal: v.y1 === v.y2, style: v.st, width: v.w, color: v.ci });
       if (y1 != null && v.y1 === v.y2 && !seen[y1]) { hLevels.push(y1); seen[y1] = true; }
     }
@@ -1002,7 +1013,7 @@ function formatPineLabels(raw, max_labels, verbose, since, until) {
     let labels = s.items.map(item => {
       const v = item.raw;
       const text = v.t || '';
-      const price = v.y != null ? Math.round(v.y * 100) / 100 : null;
+      const price = v.y != null ? roundPrice(v.y) : null;
       const bar_time = item.bar_time != null ? item.bar_time : null;
       const ohlcv = item.bar_ohlcv || null;
       // signal_price = the bar's close at the time the label was drawn — i.e.
@@ -1058,9 +1069,9 @@ function formatPineBoxes(raw, verbose) {
     const allBoxes = [];
     for (const item of s.items) {
       const v = item.raw;
-      const high = v.y1 != null && v.y2 != null ? Math.round(Math.max(v.y1, v.y2) * 100) / 100 : null;
-      const low = v.y1 != null && v.y2 != null ? Math.round(Math.min(v.y1, v.y2) * 100) / 100 : null;
-      if (verbose) allBoxes.push({ id: item.id, high, low, x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
+      const high = v.y1 != null && v.y2 != null ? roundPrice(Math.max(v.y1, v.y2)) : null;
+      const low = v.y1 != null && v.y2 != null ? roundPrice(Math.min(v.y1, v.y2)) : null;
+      if (verbose) allBoxes.push({ id: item.id, high, low, text: v.t || '', x1: v.x1, x2: v.x2, borderColor: v.c, bgColor: v.bc });
       if (high != null && low != null) { const key = high + ':' + low; if (!seen[key]) { zones.push({ high, low }); seen[key] = true; } }
     }
     zones.sort((a, b) => b.high - a.high);
@@ -1170,7 +1181,11 @@ export async function batchReadPanes({ indices, reads, wait_ms, _deps } = {}) {
                   }
                 }
               } catch(e) {}
-              if (Object.keys(values).length > 0) results.push({ name: name, values: values });
+              var id = null;
+              try { id = s.id ? s.id() : null; } catch(e) {}
+              var inputs = null;
+              try { var ip = s.inputs ? s.inputs() : null; if (ip && Object.keys(ip).length) inputs = ip; } catch(e) {}
+              if (Object.keys(values).length > 0) results.push({ id: id, name: name, inputs: inputs, values: values });
             } catch(e) {}
           }
           return results;
@@ -1201,8 +1216,8 @@ export async function batchReadPanes({ indices, reads, wait_ms, _deps } = {}) {
             bar_count: out.length,
             period: { from: first.time, to: last.time },
             open: first.open, close: last.close, high: high, low: low,
-            range: Math.round((high - low) * 100) / 100,
-            change: Math.round((last.close - first.open) * 100) / 100,
+            range: Math.round((high - low) * 1e8) / 1e8,
+            change: Math.round((last.close - first.open) * 1e8) / 1e8,
             change_pct: first.open ? Math.round(((last.close - first.open) / first.open) * 10000) / 100 + '%' : 'n/a',
             avg_volume: Math.round(volSum / out.length),
             last_5_bars: out.slice(-5),
