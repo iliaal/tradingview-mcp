@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fork-adopted drawing tools: N-point shapes, `draw_move`,
+  `draw_set_properties`, `draw_set_visible`, merged two-point position
+  boxes, `draw_list` price/title enrichment (mustafagurbuzai,
+  0xdungbui; #536 style layer preserved).
+- Fork-adopted alert options: `name`, opt-in `webhook` (SSRF-guarded),
+  `email`, `frequency`, `expiration`, `auto_deactivate`, plus full
+  channel surfacing in `alert_list` (lakshman1005; defaults unchanged).
+- Fork-adopted hardening: locale-independent watchlist anchor,
+  `scrollToDate` visible-range read-back, bounded screenshots with
+  occlusion recovery, axes-in-region chart clips, `bars` alias for
+  OHLCV count (basghari, 0xdungbui).
+
 ## [1.3.0] - 2026-09-20
 
 ### Security

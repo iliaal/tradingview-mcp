@@ -44,6 +44,10 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 |------|------|---------|-------|
 | eltx88 | secrets/OS `.gitignore` entries | 2026-09-20 | Commit 762ea18 |
 | lakshman1005 + 0xdungbui | CLI stdout truncation on `process.exit()` (65KB pipe cutoff) | 2026-09-20 | NOT REPRODUCIBLE locally — our result path already drains; unified the 6 help/error exits to exitCode+return for the same libuv-safe rationale (no live truncation bug found) |
+| mustafagurbuzai | Drawing: N-point shapes, move/set/visible, two-point position, real shape list | 2026-09-20 | ADOPTED (cherry-picked onto #536 core; H10 DI-removal rejected). Live-verified 3.4.1 |
+| lakshman1005 | Alert name/webhook/email/frequency/expiry/deactivate + list surfacing | 2026-09-20 | ADOPTED opt-in with defaults preserved + SSRF guard; directional + resolution already shipped; never-expiry default DEFERRED. Live-verified 3.4.1 |
+| basghari | Bounded capture, occlusion recovery, axes clips, bars alias | 2026-09-20 | ADOPTED (macOS-gated, no-write-on-timeout). Live-verified 3.4.1 |
+| 0xdungbui | draw_list price/title, watchlist anchor, scroll read-back, postcondition tests | 2026-09-20 | ADOPTED (40-char drop DEFERRED as too lossy; title objects unwrapped). Live-verified 3.4.1 |
 
 ## Untouched / not-applicable upstream PRs
 

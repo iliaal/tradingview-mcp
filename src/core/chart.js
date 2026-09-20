@@ -359,12 +359,27 @@ export async function setSymbol({ symbol, discard_unsaved = false, _deps }) {
 
 // TV's resolution() canonicalizes day/week/month as 1D/1W/1M; callers may
 // pass D/W/M. Normalize both sides so a successful change isn't misread as a
-// mismatch (and vice-versa).
+// mismatch (and vice-versa). Intraday spellings collapse to TV canonical
+// too: 4H/12H -> minutes (240/720), 15m/15MIN -> bare minutes (15), seconds
+// words -> "<N>S". Month stays TV-canonical "<N>M" (never NMO). A bare
+// uppercase "<N>M" is month-form; minutes need lowercase "m" ("15m") or an
+// explicit minute word.
 function _normalizeResolution(r) {
-  let s = String(r == null ? '' : r).trim().toUpperCase();
-  if (s === 'D') s = '1D';
-  else if (s === 'W') s = '1W';
-  else if (s === 'M') s = '1M';
+  const raw = String(r == null ? '' : r).trim();
+  const s = raw.toUpperCase();
+  if (s === 'D') return '1D';
+  if (s === 'W') return '1W';
+  if (s === 'M' || s === 'MO') return '1M';
+  let m;
+  if ((m = /^(\d+)\s*S(?:EC(?:OND)?S?)?$/.exec(s))) return `${Number(m[1])}S`;
+  if ((m = /^(\d+)\s*H(?:R|OURS?)?$/.exec(s))) return String(Number(m[1]) * 60);
+  if ((m = /^(\d+)\s*MIN(?:UTE)?S?$/.exec(s))) return String(Number(m[1]));
+  if (/^\d+$/.test(s)) return String(Number(s));
+  if ((m = /^(\d+)\s*D(?:AY|AYS)?$/.exec(s))) return `${Number(m[1])}D`;
+  if ((m = /^(\d+)\s*W(?:EEK|EEKS)?$/.exec(s))) return `${Number(m[1])}W`;
+  if ((m = /^(\d+)\s*MO(?:NTHS?)?$/.exec(s))) return `${Number(m[1])}M`;
+  if ((m = /^(\d+)\s*m$/.exec(raw))) return String(Number(m[1]));
+  if ((m = /^(\d+)\s*M$/.exec(s))) return `${Number(m[1])}M`;
   return s;
 }
 
@@ -779,12 +794,14 @@ export async function scrollToDate({ date, _deps } = {}) {
   if (isNaN(timestamp)) throw new Error(`Could not parse date: ${date}. Use ISO format (2024-01-15) or unix timestamp.`);
 
   const resolution = await evaluate(`${CHART_API}.resolution()`);
+  const normRes = _normalizeResolution(resolution);
   let secsPerBar = 60;
-  const res = String(resolution);
-  if (res === 'D' || res === '1D') secsPerBar = 86400;
-  else if (res === 'W' || res === '1W') secsPerBar = 604800;
-  else if (res === 'M' || res === '1M') secsPerBar = 2592000;
-  else { const mins = parseInt(res, 10); if (!isNaN(mins)) secsPerBar = mins * 60; }
+  let m;
+  if ((m = /^(\d+)S$/.exec(normRes))) secsPerBar = Number(m[1]);
+  else if (/^\d+$/.test(normRes)) secsPerBar = parseInt(normRes, 10) * 60;
+  else if ((m = /^(\d+)D$/.exec(normRes))) secsPerBar = Number(m[1]) * 86400;
+  else if ((m = /^(\d+)W$/.exec(normRes))) secsPerBar = Number(m[1]) * 604800;
+  else if ((m = /^(\d+)M$/.exec(normRes))) secsPerBar = Number(m[1]) * 2592000;
 
   const halfWindow = 25 * secsPerBar;
   const from = timestamp - halfWindow;
@@ -792,7 +809,24 @@ export async function scrollToDate({ date, _deps } = {}) {
 
   await _zoomTimeRange(evaluate, from, to);
   await new Promise(r => setTimeout(r, 500));
-  return { success: true, date, centered_on: timestamp, resolution, window: { from, to } };
+  // Postcondition read-back: TV silently clamps the zoom to the loaded bar
+  // buffer, so a far-past date can snap back toward live. Report whether the
+  // target landed inside the visible range, but keep success:true — a miss
+  // is diagnostic (setVisibleRange clamped/cache_extended precedent), not a
+  // throw.
+  const actual = (await _readVisibleRange(evaluate)) || { from: 0, to: 0 };
+  const probeFailed = !!actual.error || (!actual.from && !actual.to);
+  return {
+    success: true,
+    date,
+    centered_on: timestamp,
+    resolution,
+    window: { from, to },
+    actual,
+    target_in_visible_range: !probeFailed && (actual.from || 0) <= timestamp && timestamp <= (actual.to || 0),
+    actual_read_failed: probeFailed || undefined,
+    actual_read_error: actual.error || undefined,
+  };
 }
 
 export async function symbolInfo({ _deps } = {}) {

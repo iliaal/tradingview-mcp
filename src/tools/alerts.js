@@ -5,14 +5,20 @@ import * as core from '../core/alerts.js';
 
 export function registerAlertTools(server) {
   server.tool('alert_create', 'Create a price alert on the active chart symbol via TradingView\'s REST API. Returns the assigned alert_id. Symbol/currency/resolution are inferred from the active chart.', {
-    condition: z.string().describe('Alert condition. "crossing" (any direction, default), "greater_than" / "above" / "cross_up" (price crosses upward), "less_than" / "below" / "cross_down" (price crosses downward).'),
+    condition: z.string().describe('Alert condition. "crossing" (any direction, default), "greater_than" / "above" / "cross_up" (price crosses upward), "less_than" / "below" / "cross_down" (price crosses downward). For a stop-loss below price use "less_than" / "below" / "cross_down" — plain "crossing" fires in BOTH directions, so a rally back up through a sell level would dispatch a sell. Note a crossing is an EVENT: if price is already beyond the level when the alert is created, it will not fire until price returns across it.'),
     price: z.preprocess(
       (v) => (typeof v === 'string' && v.trim() === '' ? NaN : v),
       z.coerce.number().refine((n) => Number.isFinite(n), { message: 'price is required and must be a number' }),
     ).describe('Price level for the alert'),
     message: z.string().optional().describe('Alert message. Defaults to "<TICKER> <condition> <price>".'),
-  }, async ({ condition, price, message }) => {
-    try { return jsonResult(await core.create({ condition, price, message })); }
+    name: z.string().optional().describe('Alert name (shown in TradingView\'s Alert name field, and in the alert list UI).'),
+    webhook: z.string().optional().describe('Webhook URL TV will POST the message to when the alert fires. OMIT THIS AND THE ALERT DISPATCHES NOTHING — it fires, updates last_fire_time and shows a popup, but no request is ever sent. Must be a public http(s) URL.'),
+    email: boolish.optional().describe('Also send the email notification (default false).'),
+    frequency: z.string().optional().describe('How often the alert may fire ("on_first_fire" default).'),
+    expiration: z.union([z.string(), z.number()]).optional().describe('Days until expiry, or "never" for open-ended (default 30). A 30-day stop-loss quietly stops existing — pass "never" for protection alerts.'),
+    auto_deactivate: boolish.optional().describe('Switch the alert off after it fires (default true). Set false with cross_up/cross_down so it re-arms on the next genuine crossing.'),
+  }, async ({ condition, price, message, name, webhook, email, frequency, expiration, auto_deactivate }) => {
+    try { return jsonResult(await core.create({ condition, price, message, name, webhook, email, frequency, expiration, auto_deactivate })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

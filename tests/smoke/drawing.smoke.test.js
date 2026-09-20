@@ -102,9 +102,9 @@ describe('core/drawing.js — smoke', () => {
 
   // ── B.13 drawPosition ──────────────────────────────────────────────
   it('test_drawPosition_smoke_long', async () => {
-    // evaluate call sequence:
-    //   1. pricescale lookup → 100
-    //   2. (no entry_time given) getVisibleRange → { to: 1700003600 }
+    // evaluate call sequence (merged minTick chain):
+    //   1. (no entry_time given) getVisibleRange → { to: 1700003600 }
+    //   2. priceFormatter probe → 0.01 (minTick directly)
     //   3. before-ids
     //   4. createShape (returns undefined)
     //   5. after-ids → adds 'pos-1'
@@ -113,8 +113,8 @@ describe('core/drawing.js — smoke', () => {
       getChartApi: async () => 'window.chartApi',
       evaluate: async () => {
         call++;
-        if (call === 1) return 100;                   // pricescale
-        if (call === 2) return { to: 1700003600 };    // getVisibleRange
+        if (call === 1) return { to: 1700003600 };    // getVisibleRange
+        if (call === 2) return 0.01;                  // priceFormatter minTick
         if (call === 3) return ['old-1'];             // before
         if (call === 4) return undefined;             // createShape
         return ['old-1', 'pos-1'];                    // after
@@ -136,8 +136,8 @@ describe('core/drawing.js — smoke', () => {
       getChartApi: async () => 'window.chartApi',
       evaluate: async () => {
         call++;
-        if (call === 1) return 100;
-        if (call === 2) return { to: 1700003600 };
+        if (call === 1) return { to: 1700003600 };
+        if (call === 2) return 0.01;
         if (call === 3) return [];
         if (call === 4) return undefined;
         return ['pos-2'];
@@ -176,11 +176,11 @@ describe('core/drawing.js — smoke', () => {
     );
   });
 
-  it('test_drawPosition_smoke_rejects_zero_pricescale', async () => {
+  it('test_drawPosition_smoke_rejects_unresolvable_mintick', async () => {
     installCdpMocks({ getChartApi: async () => 'window.chartApi', evaluate: async () => 0 });
     await assert.rejects(
       drawing.drawPosition({ direction: 'long', entry_price: 100, stop_loss: 95, take_profit: 110 }),
-      /pricescale/,
+      /minTick/,
     );
   });
 });

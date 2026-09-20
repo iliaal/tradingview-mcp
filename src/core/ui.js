@@ -183,7 +183,7 @@ export async function openPanel({ panel, action, _deps }) {
     return { success: true, panel, action, was_open: result?.was_open ?? false, performed: result?.performed ?? 'unknown', api_action: result?.api_action, clicked_button: result?.clicked_button };
   } else {
     const selectorMap = {
-      'watchlist': { dataName: 'base-watchlist-widget-button', ariaLabel: 'Watchlist' },
+      'watchlist': { dataName: 'base-watchlist-widget-button', ariaLabel: 'Watchlist', toolbarAnchor: '[data-name="right-toolbar"] [data-name="base"]' },
       'alerts': { dataName: 'alerts-button', ariaLabel: 'Alerts' },
       'trading': { dataName: 'trading-button', ariaLabel: 'Trading Panel' },
     };
@@ -192,8 +192,11 @@ export async function openPanel({ panel, action, _deps }) {
       (function() {
         var dataName = ${JSON.stringify(sel.dataName)};
         var ariaLabel = ${JSON.stringify(sel.ariaLabel)};
+        var toolbarAnchor = ${JSON.stringify(sel.toolbarAnchor || null)};
         var action = ${JSON.stringify(action)};
-        var btn = document.querySelector('[data-name="' + dataName + '"]') || document.querySelector('[aria-label="' + ariaLabel + '"]');
+        // Locale-independent anchor first (Desktop 3.4.0 removed the legacy
+        // watchlist data-name); legacy anchors kept as fallbacks.
+        var btn = (toolbarAnchor && document.querySelector(toolbarAnchor)) || document.querySelector('[data-name="' + dataName + '"]') || document.querySelector('[aria-label="' + ariaLabel + '"]');
         if (!btn) return { error: 'Button not found for panel: ' + ${JSON.stringify(panel)} };
         var isActive = btn.getAttribute('aria-pressed') === 'true' || btn.classList.contains('isActive') || btn.classList.toString().indexOf('active') !== -1 || btn.classList.toString().indexOf('Active') !== -1;
         var rightArea = document.querySelector('[class*="layout__area--right"]');

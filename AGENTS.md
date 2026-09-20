@@ -197,8 +197,8 @@ Pine graphics path: `study._graphics._primitivesCollection.dwglines.get('lines')
 - Commands (exact, from `package.json` scripts):
   - `npm start` (`node src/server.js`) / `npm run tv` (`node src/cli/index.js`)
   - `npm test` — e2e + pine_analyze (needs live TradingView + CDP)
-  - `npm run test:offline` — full offline suite (`SKIP_NETWORK_TESTS=1`; pine_analyze, sanitization, replay, cli, patterns, multi_timeframe, hotlist, chart_remove_studies, connection_reconnect, chart_indicator, data_formatting, format, tool_registry, tool_count, drawing_style, smoke)
-  - `npm run test:unit`, `npm run test:smoke`, `npm run test:e2e`, `npm run test:cli` — scoped suites (`test:unit` = pine_analyze, cli, chart_indicator, data_formatting, format, tool_registry, tool_count, drawing_style); `npm run test:verbose`, `npm run test:count` — reporting variants
+  - `npm run test:offline` — full offline suite (`SKIP_NETWORK_TESTS=1`; pine_analyze, sanitization, replay, cli, patterns, multi_timeframe, hotlist, chart_remove_studies, connection_reconnect, chart_indicator, data_formatting, format, tool_registry, tool_count, drawing, drawing_style, postcondition_checks, capture_hardening, smoke)
+  - `npm run test:unit`, `npm run test:smoke`, `npm run test:e2e`, `npm run test:cli` — scoped suites (`test:unit` = pine_analyze, cli, chart_indicator, data_formatting, format, tool_registry, tool_count, drawing, drawing_style); `npm run test:verbose`, `npm run test:count` — reporting variants
   - `npm run test:e2e-all` — both live suites serially (`--test-concurrency=1`; `e2e` + `new_features`, the latter skips under `SKIP_NETWORK_TESTS=1`); `npm run test:all` — e2e + pine_analyze + cli combo
   - `npm run check:syntax` — `node --check` over `src` + `tests`
   - `npm run lint` / `npm run lint:fix` — eslint over `src/` (config `eslint.config.mjs`)

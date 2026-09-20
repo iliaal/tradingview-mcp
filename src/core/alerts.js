@@ -39,13 +39,64 @@ function _normalizeCondition(condition) {
 
 const PRICE_ALERT_DEFAULT_EXPIRATION_DAYS = 30;
 
-export async function create({ condition, price, message, _deps } = {}) {
+// Parse boolean-ish input (MCP boolish / CLI booleans arrive normalized, but
+// direct core callers may pass strings). Unknown values fall back to Boolean().
+function _coerceBool(v) {
+  if (typeof v !== 'string') return Boolean(v);
+  const s = v.trim().toLowerCase();
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off' || s === '') return false;
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  return Boolean(v);
+}
+
+// Resolve the opt-in `expiration` param. Omitted → historic 30-day expiry.
+// Explicit 'never' → TV's open-ended shape (expiration null +
+// expiration_policy { time: null, policy: 'never' }). Anything else must be a
+// positive number of days. Throws on invalid input (mirrors the fork's error).
+function _resolvePriceExpiration(expiration) {
+  if (expiration == null) {
+    return {
+      expiration: new Date(Date.now() + PRICE_ALERT_DEFAULT_EXPIRATION_DAYS * 86400 * 1000).toISOString(),
+      expirationPolicy: null,
+    };
+  }
+  if (typeof expiration === 'string' && expiration.trim().toLowerCase() === 'never') {
+    return { expiration: null, expirationPolicy: { time: null, policy: 'never' } };
+  }
+  const days = Number(expiration);
+  if (!Number.isFinite(days) || days <= 0) {
+    throw new Error(`expiration must be a positive number of days, or 'never' (got ${expiration})`);
+  }
+  return {
+    expiration: new Date(Date.now() + days * 86400 * 1000).toISOString(),
+    expirationPolicy: null,
+  };
+}
+
+export async function create({ condition, price, message, name, webhook, email, frequency, expiration, auto_deactivate, _deps } = {}) {
   const { evaluate, evaluateAsync } = _resolve(_deps);
   if (price == null || isNaN(Number(price))) {
     return { success: false, error: 'price is required and must be a number', source: 'rest_api' };
   }
   const numericPrice = Number(price);
 
+  // web_hook and email are OPT-IN with the historic behavior as default
+  // (web_hook null, email false): omitting them leaves the payload
+  // byte-identical to before. An alert without either fires, updates
+  // last_fire_time and shows a popup — but dispatches NOTHING.
+  const hook = (typeof webhook === 'string' && webhook.trim()) ? webhook.trim() : null;
+  _assertSafeWebhook(hook);
+  const wantEmail = email == null ? false : _coerceBool(email);
+
+  const freq = (typeof frequency === 'string' && frequency.trim()) ? frequency.trim() : 'on_first_fire';
+
+  const { expiration: expirationValue, expirationPolicy } = _resolvePriceExpiration(expiration);
+
+  // Default true preserves historic fire-once behavior; a self-re-arming
+  // cross_up/cross_down alert wants false, and the caller says so explicitly.
+  const autoDeact = auto_deactivate == null ? true : _coerceBool(auto_deactivate);
+
+  const alertName = (typeof name === 'string' && name.trim()) ? name.trim() : null;
   const symbolInfo = await evaluate(`
     (function() {
       try {
@@ -81,7 +132,6 @@ export async function create({ condition, price, message, _deps } = {}) {
   }
   const bareTicker = String(symbolInfo.symbol).split(':').pop();
   const defaultMessage = message || `${bareTicker} ${condition ? String(condition).toLowerCase() : 'crossing'} ${numericPrice}`;
-  const expiration = new Date(Date.now() + PRICE_ALERT_DEFAULT_EXPIRATION_DAYS * 86400 * 1000).toISOString();
 
   const payload = {
     symbol: symbolMarker,
@@ -90,22 +140,28 @@ export async function create({ condition, price, message, _deps } = {}) {
     sound_file: null,
     sound_duration: 0,
     popup: true,
-    expiration,
-    auto_deactivate: true,
-    email: false,
+    auto_deactivate: autoDeact,
+    email: wantEmail,
     sms_over_email: false,
     mobile_push: true,
-    web_hook: null,
-    name: null,
+    web_hook: hook,
+    name: alertName,
     conditions: [{
       type: condType,
-      frequency: 'on_first_fire',
+      frequency: freq,
       series: [{ type: 'barset' }, { type: 'value', value: numericPrice }],
       resolution: String(symbolInfo.resolution || '1'),
     }],
     active: true,
     ignore_warnings: true,
   };
+
+  if (expirationPolicy) {
+    payload.expiration = null;
+    payload.expiration_policy = expirationPolicy;
+  } else {
+    payload.expiration = expirationValue;
+  }
 
   const body = JSON.stringify({ payload });
   const response = await evaluateAsync(`
@@ -126,16 +182,24 @@ export async function create({ condition, price, message, _deps } = {}) {
 
   if (parsed?.s === 'ok' && parsed?.r) {
     const created = parsed.r;
-    return {
+    const out = {
       success: true,
       alert_id: created.alert_id || null,
       symbol: symbolInfo.symbol,
       price: numericPrice,
       condition: condType,
       message: defaultMessage,
-      expiration: created.expiration || expiration,
+      name: alertName,
+      web_hook: hook,
+      email: wantEmail,
+      frequency: freq,
+      auto_deactivate: autoDeact,
+      resolution: String(symbolInfo.resolution || '1'),
+      expiration: created.expiration || expirationValue,
       source: 'rest_api',
     };
+    if (expirationPolicy) out.expiration_policy = expirationPolicy;
+    return out;
   }
 
   return {
@@ -162,6 +226,7 @@ export async function list({ _deps } = {}) {
               alert_id: a.alert_id,
               symbol: sym,
               type: a.type,
+              name: a.name == null ? null : a.name,
               message: a.message,
               active: a.active,
               condition: a.condition,
@@ -169,6 +234,21 @@ export async function list({ _deps } = {}) {
               created: a.create_time,
               last_fired: a.last_fire_time,
               expiration: a.expiration,
+              // Notification channels — the API returns them; dropping them
+              // made a silently-unarmed alert impossible to audit (an alert
+              // with web_hook null and email false fires and dispatches NOTHING).
+              web_hook: a.web_hook || null,
+              email: !!a.email,
+              popup: !!a.popup,
+              mobile_push: !!a.mobile_push,
+              // Whether the alert switches itself off after firing, and how
+              // often it may fire. The condition shape differs between price
+              // and indicator alerts, so read frequency from both.
+              auto_deactivate: !!a.auto_deactivate,
+              frequency: ((a.condition && typeof a.condition === 'object' && !Array.isArray(a.condition) && a.condition.frequency) || (a.conditions && a.conditions[0] && a.conditions[0].frequency) || null),
+              // Why TradingView last refused/stopped it, when it says anything.
+              last_error: a.last_error || null,
+              last_stop_reason: a.last_stop_reason || null,
             };
           })
         };

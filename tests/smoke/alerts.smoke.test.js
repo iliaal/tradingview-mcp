@@ -83,6 +83,148 @@ describe('core/alerts.js — smoke', () => {
     assert.match(r.error, /invalid price/);
   });
 
+  it('test_create_smoke_defaultChannelsPreserved', async () => {
+    // Opt-in fields default to the historic behavior: no webhook, no email,
+    // no name, fire-once frequency, auto-deactivate, ~30d expiry.
+    let captured = null;
+    installCdpMocks({
+      evaluate: async () => CHART_INFO,
+      evaluateAsync: async (script) => {
+        captured = script;
+        return { status: 200, body: JSON.stringify({ s: 'ok', r: { alert_id: 7 } }) };
+      },
+    });
+    const before = Date.now();
+    const r = await alerts.create({ condition: 'crossing', price: 100 });
+    const after = Date.now();
+    assert.equal(r.success, true);
+    assert.equal(r.web_hook, null);
+    assert.equal(r.email, false);
+    assert.equal(r.name, null);
+    assert.equal(r.frequency, 'on_first_fire');
+    assert.equal(r.auto_deactivate, true);
+    const bodyMatch = captured.match(/body:\s*("(?:[^"\\]|\\.)*")/);
+    const obj = JSON.parse(JSON.parse(bodyMatch[1]));
+    assert.equal(obj.payload.web_hook, null);
+    assert.equal(obj.payload.email, false);
+    assert.equal(obj.payload.name, null);
+    assert.equal(obj.payload.auto_deactivate, true);
+    assert.equal(obj.payload.conditions[0].frequency, 'on_first_fire');
+    assert.ok(!('expiration_policy' in obj.payload), 'no expiration_policy by default');
+    const expMs = Date.parse(obj.payload.expiration);
+    const dayMs = 86400 * 1000;
+    assert.ok(expMs >= before + 30 * dayMs - 60 * 1000, 'expiry ~30d out');
+    assert.ok(expMs <= after + 30 * dayMs + 60 * 1000, 'expiry ~30d out');
+    assert.equal(r.expiration, obj.payload.expiration);
+  });
+
+  it('test_create_smoke_explicitChannels', async () => {
+    let captured = null;
+    installCdpMocks({
+      evaluate: async () => CHART_INFO,
+      evaluateAsync: async (script) => {
+        captured = script;
+        return { status: 200, body: JSON.stringify({ s: 'ok', r: { alert_id: 8, expiration: null } }) };
+      },
+    });
+    const r = await alerts.create({
+      condition: 'cross_down', price: 95, message: 'stop',
+      name: 'stop-loss', webhook: 'https://example.com/tv-hook',
+      email: true, frequency: 'on_bar_close',
+      expiration: 'never', auto_deactivate: false,
+    });
+    assert.equal(r.success, true);
+    assert.equal(r.name, 'stop-loss');
+    assert.equal(r.web_hook, 'https://example.com/tv-hook');
+    assert.equal(r.email, true);
+    assert.equal(r.frequency, 'on_bar_close');
+    assert.equal(r.auto_deactivate, false);
+    assert.equal(r.expiration, null);
+    assert.deepEqual(r.expiration_policy, { time: null, policy: 'never' });
+    const bodyMatch = captured.match(/body:\s*("(?:[^"\\]|\\.)*")/);
+    const obj = JSON.parse(JSON.parse(bodyMatch[1]));
+    assert.equal(obj.payload.name, 'stop-loss');
+    assert.equal(obj.payload.web_hook, 'https://example.com/tv-hook');
+    assert.equal(obj.payload.email, true);
+    assert.equal(obj.payload.conditions[0].frequency, 'on_bar_close');
+    assert.equal(obj.payload.auto_deactivate, false);
+    assert.equal(obj.payload.expiration, null);
+    assert.deepEqual(obj.payload.expiration_policy, { time: null, policy: 'never' });
+  });
+
+  it('test_create_smoke_explicitExpirationDays', async () => {
+    let captured = null;
+    installCdpMocks({
+      evaluate: async () => CHART_INFO,
+      evaluateAsync: async (script) => {
+        captured = script;
+        return { status: 200, body: JSON.stringify({ s: 'ok', r: { alert_id: 9 } }) };
+      },
+    });
+    const before = Date.now();
+    const r = await alerts.create({ condition: 'crossing', price: 100, expiration: 7 });
+    assert.equal(r.success, true);
+    const bodyMatch = captured.match(/body:\s*("(?:[^"\\]|\\.)*")/);
+    const obj = JSON.parse(JSON.parse(bodyMatch[1]));
+    assert.ok(!('expiration_policy' in obj.payload), 'no expiration_policy for day expiry');
+    const expMs = Date.parse(obj.payload.expiration);
+    assert.ok(expMs >= before + 7 * 86400 * 1000 - 60 * 1000, 'expiry ~7d out');
+    assert.ok(expMs <= Date.now() + 7 * 86400 * 1000 + 60 * 1000, 'expiry ~7d out');
+  });
+
+  it('test_create_smoke_invalidExpiration', async () => {
+    installCdpMocks({ evaluate: async () => CHART_INFO });
+    await assert.rejects(
+      alerts.create({ condition: 'crossing', price: 100, expiration: 'soon' }),
+      /positive number of days.*never/,
+    );
+    await assert.rejects(
+      alerts.create({ condition: 'crossing', price: 100, expiration: -5 }),
+      /positive number of days/,
+    );
+    await assert.rejects(
+      alerts.create({ condition: 'crossing', price: 100, expiration: 0 }),
+      /positive number of days/,
+    );
+  });
+
+  it('test_create_smoke_rejectsUnsafeWebhook', async () => {
+    installCdpMocks({ evaluate: async () => CHART_INFO });
+    await assert.rejects(
+      alerts.create({ condition: 'crossing', price: 100, webhook: 'http://127.0.0.1/hook' }),
+      /loopback|private/,
+    );
+    await assert.rejects(
+      alerts.create({ condition: 'crossing', price: 100, webhook: 'ftp://example.com/hook' }),
+      /http/,
+    );
+  });
+
+  it('test_list_smoke_surfacesChannels', async () => {
+    installCdpMocks({
+      evaluateAsync: async () => ({
+        alerts: [{
+          alert_id: 5, symbol: 'AAPL', type: 'price', message: 'm', active: true,
+          name: 'stop-loss', web_hook: 'https://example.com/tv-hook', email: true,
+          popup: true, mobile_push: true, auto_deactivate: false, frequency: 'on_bar_close',
+          last_error: 'e1', last_stop_reason: 's1',
+        }],
+      }),
+    });
+    const r = await alerts.list();
+    assert.equal(r.success, true);
+    const a = r.alerts[0];
+    assert.equal(a.name, 'stop-loss');
+    assert.equal(a.web_hook, 'https://example.com/tv-hook');
+    assert.equal(a.email, true);
+    assert.equal(a.popup, true);
+    assert.equal(a.mobile_push, true);
+    assert.equal(a.auto_deactivate, false);
+    assert.equal(a.frequency, 'on_bar_close');
+    assert.equal(a.last_error, 'e1');
+    assert.equal(a.last_stop_reason, 's1');
+  });
+
   it('test_list_smoke', async () => {
     installCdpMocks({
       evaluateAsync: async () => ({

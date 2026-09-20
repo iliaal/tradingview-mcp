@@ -14,6 +14,7 @@ import { waitForChartReady as _waitForChartReady } from '../wait.js';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { resolveScreenshotDir } from './paths.js';
+import { withTimeout as _withTimeout, isCaptureTimeout as _isCaptureTimeout, resolveCaptureTimeoutMs as _resolveCaptureTimeoutMs } from './capture.js';
 
 function _resolve(deps) {
   return {
@@ -24,11 +25,14 @@ function _resolve(deps) {
     getChartCollection: deps?.getChartCollection || _getChartCollection,
     withReconnect: deps?.withReconnect || _withReconnect,
     waitForChartReady: deps?.waitForChartReady || _waitForChartReady,
+    withTimeout: deps?.withTimeout || _withTimeout,
+    isCaptureTimeout: deps?.isCaptureTimeout || _isCaptureTimeout,
+    resolveCaptureTimeoutMs: deps?.resolveCaptureTimeoutMs || _resolveCaptureTimeoutMs,
   };
 }
 
 export async function batchRun({ symbols, timeframes, action, delay_ms, ohlcv_count, output_dir, _deps }) {
-  const { evaluate, evaluateAsync, getChartApi, getChartCollection, withReconnect, waitForChartReady } = _resolve(_deps);
+  const { evaluate, evaluateAsync, getChartApi, getChartCollection, withReconnect, waitForChartReady, withTimeout, isCaptureTimeout, resolveCaptureTimeoutMs } = _resolve(_deps);
   const tfs = timeframes && timeframes.length > 0 ? timeframes : [null];
   const delay = delay_ms || 2000;
   const results = [];
@@ -83,7 +87,23 @@ export async function batchRun({ symbols, timeframes, action, delay_ms, ohlcv_co
 
           let actionResult;
           if (action === 'screenshot') {
-            const { data } = await withReconnect(c => c.Page.captureScreenshot({ format: 'png' }));
+            // Bound each sweep capture like the single-shot path: a hung frame
+            // becomes a per-combo {success:false} entry (no file written),
+            // with a single retry on stage-timeout only.
+            const timeoutMs = resolveCaptureTimeoutMs();
+            const takeShot = () => withTimeout(
+              withReconnect(c => c.Page.captureScreenshot({ format: 'png' })),
+              timeoutMs,
+              'batch Page.captureScreenshot',
+            );
+            let shot;
+            try {
+              shot = await takeShot();
+            } catch (err) {
+              if (!isCaptureTimeout(err)) throw err;
+              shot = await takeShot();
+            }
+            const { data } = shot;
             const ts = new Date().toISOString().replace(/[:.]/g, '-');
             const fname = `batch_${symbol}_${tf || 'default'}_${ts}`.replace(/[/\\]/g, '_') + '.png';
             const filePath = join(targetDir, fname);

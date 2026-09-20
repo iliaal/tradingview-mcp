@@ -12,6 +12,13 @@ function _resolve(deps) {
   };
 }
 
+// Locale-independent watchlist toolbar anchor. Desktop 3.4.0 removed the
+// legacy `base-watchlist-widget-button` data-name and the aria-label is
+// English-locale-dependent, so try the language-independent
+// right-toolbar/base pair first and keep the legacy anchors as fallbacks
+// for older builds.
+const WL_BUTTON_JS = `document.querySelector('[data-name="right-toolbar"] [data-name="base"]') || document.querySelector('[data-name="base-watchlist-widget-button"]') || document.querySelector('[aria-label*="Watchlist"]')`;
+
 export async function get({ _deps } = {}) {
   const { evaluate } = _resolve(_deps);
   // Try internal API first — reads from the active watchlist widget
@@ -98,8 +105,7 @@ export async function add({ symbol, _deps }) {
   // Ensure watchlist panel is open
   const panelState = await evaluate(`
     (function() {
-      var btn = document.querySelector('[data-name="base-watchlist-widget-button"]')
-        || document.querySelector('[aria-label*="Watchlist"]');
+      var btn = ${WL_BUTTON_JS};
       if (!btn) return { error: 'Watchlist button not found' };
       var isActive = btn.getAttribute('aria-pressed') === 'true'
         || btn.classList.toString().indexOf('Active') !== -1
@@ -346,8 +352,7 @@ export async function addBulk({ symbols, _deps }) {
   // Ensure watchlist panel is open
   await evaluate(`
     (function() {
-      var btn = document.querySelector('[data-name="base-watchlist-widget-button"]')
-        || document.querySelector('[aria-label*="Watchlist"]');
+      var btn = ${WL_BUTTON_JS};
       if (!btn) return;
       var isActive = btn.getAttribute('aria-pressed') === 'true'
         || btn.classList.toString().indexOf('Active') !== -1;
