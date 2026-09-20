@@ -507,6 +507,16 @@ export async function compile({ _deps } = {}) {
 
   const clicked = await evaluate(`
     (function() {
+      // Fast path: TV's stable selector. Survives icon-only button refactors
+      // (Desktop 3.4.x ships no text and no title until a script has been
+      // added once) because data-qa-id is a test/QA attribute, not styling.
+      var qa = document.querySelector('[data-qa-id="add-script-to-chart"]');
+      if (qa && qa.offsetParent !== null) {
+        qa.click();
+        var t = qa.getAttribute('title') || '';
+        return /update on chart/i.test(t) ? 'Update on chart' : 'Add to chart';
+      }
+
       var btns = document.querySelectorAll('button');
       var fallback = null;
       var fallbackLabel = null;

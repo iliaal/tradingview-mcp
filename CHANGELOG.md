@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Dependabot `hono` 4.13.0 → 4.13.7 (upstream XSS fix, transitive via MCP
+  SDK; stdio transport never loads the affected path) and `js-yaml`
+  4.3.1 → 4.3.2 (merge-DoS backport, dev-only via eslint chain).
+  Lockfile-only, CI green pre-merge.
+
+### Added
+- `draw_shape` style parameters (`color`/`linewidth`/`linestyle`, plus
+  text styling) with a landed-vs-requested report in the result.
+  Port of upstream #536, including its `tests/drawing_style.test.js`
+  regression suite (19 tests, wired into `test:offline`/`test:unit`).
+- Offline test coverage: `hotlist` + `replay` session smoke suites and a
+  registry tool-count parity test; orphaned `new_features.e2e.test.js`
+  gated on `SKIP_NETWORK_TESTS` and wired into new `npm run test:e2e-all`.
+  Live `test:e2e-all` still requires TradingView Desktop on :9222.
+
+### Changed
+
+- Unified agent context: `AGENTS.md` now carries beads ledger, rules,
+  TradingView decision tree, and CodeSage guide in one file; `CLAUDE.md`
+  is a symlink to it. No stale tool counts.
+- Pine `compile()` reuses the `data-qa-id` fast path for icon-only
+  add-to-chart buttons; launch scripts silence child streams
+  (`Start-Process` on Windows). Remainder of upstream #522/#532.
+
+### Deferred (documented, not merged)
+
+- Upstream #526 (new `indicator_get/set_style` tools, 455 additions) and
+  #530 (MSIX sync-EPERM/sandbox) need a live-TV verification pass first;
+  #523 (trade journal) and divergent iliaal forks stay out of scope.
+
 ## [1.2.0] - 2026-06-06
 
 Upstream ports (screenshot render-wait, MCP config path, OHLCV symbol

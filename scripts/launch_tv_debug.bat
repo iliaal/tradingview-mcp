@@ -36,7 +36,18 @@ if "%TV_EXE%"=="" (
 
 echo Found TradingView at: %TV_EXE%
 echo Starting with --remote-debugging-port=%PORT%...
-start "" "%TV_EXE%" --remote-debugging-port=%PORT%
+REM Launch via Start-Process, not `start`. TradingView outlives this script, and
+REM `start` hands it our inherited std handles, so a caller that captures our
+REM output (an agent, a CI step, `| tee`) never sees the pipe reach EOF and hangs
+REM until TradingView is closed — even though the script itself already finished.
+REM Redirecting the `start` line does not help: cmd applies the redirection to
+REM the `start` builtin, and the child still gets the handles. Start-Process
+REM creates a genuinely independent process, so the pipe closes with us.
+powershell -NoProfile -Command "Start-Process -FilePath '%TV_EXE%' -ArgumentList '--remote-debugging-port=%PORT%'"
+if errorlevel 1 (
+    echo Error: failed to launch TradingView.
+    exit /b 1
+)
 
 echo Waiting for CDP to become available...
 timeout /t 5 /nobreak >nul

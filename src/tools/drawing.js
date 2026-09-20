@@ -3,14 +3,20 @@ import { jsonResult } from './_format.js';
 import * as core from '../core/drawing.js';
 
 export function registerDrawingTools(server) {
-  server.tool('draw_shape', 'Draw a shape/line on the chart', {
+  server.tool('draw_shape', 'Draw a shape/line on the chart. Style it with color/linewidth/linestyle (or a full `overrides` object). The result echoes style_applied — read back from the chart — and lists any style_not_applied keys.', {
     shape: z.string().describe('Shape type: horizontal_line, vertical_line, trend_line, rectangle, text'),
     point: z.object({ time: z.coerce.number(), price: z.coerce.number() }).describe('{ time: unix_timestamp, price: number }'),
     point2: z.object({ time: z.coerce.number(), price: z.coerce.number() }).optional().describe('Second point for two-point shapes (trend_line, rectangle)'),
-    overrides: z.string().optional().describe('JSON string of style overrides (e.g., \'{"linecolor": "#ff0000", "linewidth": 2}\')'),
     text: z.string().optional().describe('Text content for text shapes'),
-  }, async ({ shape, point, point2, overrides, text }) => {
-    try { return jsonResult(await core.drawShape({ shape, point, point2, overrides, text })); }
+    color: z.string().optional().describe('Line color, e.g. "#FF80AB" (alias for linecolor)'),
+    linecolor: z.string().optional().describe('Line color, e.g. "#FF80AB" (takes precedence over color)'),
+    linewidth: z.coerce.number().optional().describe('Line width in px, e.g. 2'),
+    linestyle: z.coerce.number().optional().describe('0 = solid, 1 = dotted, 2 = dashed'),
+    textcolor: z.string().optional().describe('Label text color, e.g. "#FFFFFF"'),
+    fontsize: z.coerce.number().optional().describe('Label font size, e.g. 14'),
+    overrides: z.union([z.string(), z.record(z.any())]).optional().describe('Full style override object, or a JSON string of one (e.g. \'{"linecolor": "#ff0000", "linewidth": 2}\'). Wins over the shorthand params above.'),
+  }, async ({ shape, point, point2, overrides, text, color, linecolor, linewidth, linestyle, textcolor, fontsize }) => {
+    try { return jsonResult(await core.drawShape({ shape, point, point2, overrides, text, color, linecolor, linewidth, linestyle, textcolor, fontsize })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

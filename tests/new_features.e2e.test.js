@@ -42,7 +42,14 @@ async function activeResolution() {
   return evaluate(`${CHART_API}.resolution()`);
 }
 
-describe('TradingView MCP — post-1.1.0 feature E2E', () => {
+// Offline-safe: SKIP_NETWORK_TESTS=1 (used by `npm run test:offline`) skips
+// this live-CDP suite instead of failing in before(connect). Wired into
+// `npm run test:e2e-all`; see package.json.
+const OFFLINE_SKIP = process.env.SKIP_NETWORK_TESTS === '1'
+  ? 'requires live TradingView (SKIP_NETWORK_TESTS=1)'
+  : false;
+
+describe('TradingView MCP — post-1.1.0 feature E2E', { skip: OFFLINE_SKIP }, () => {
   let originalSymbol;
   let originalTF;
   let tmpShotDir;
