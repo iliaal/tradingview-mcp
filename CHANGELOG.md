@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.3.0] - 2026-09-20
 
 ### Security
 
@@ -30,9 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pine `compile()` reuses the `data-qa-id` fast path for icon-only
   add-to-chart buttons; launch scripts silence child streams
   (`Start-Process` on Windows). Remainder of upstream #522/#532.
-- `replay.stop()` uses goToRealtime-only exit (never `stopReplay()` first,
-  which desyncs TV's replay manager), prefers 3.4.1's `leaveReplay()` when
-  present, and polls for live-bar reload before returning. Test setup
+- `replay.stop()` exits without `stopReplay()` first (which desyncs TV's
+  replay manager), preferring 3.4.1's `leaveReplay()` with a `goToRealtime()`
+  fallback, and polls for live-bar reload before returning. Test setup
   no longer calls `goToRealtime()` on non-replay charts (that desync
   wedged every later session). Full upstream #532 replay core, verified
   live on TV Desktop 3.4.1 (`test:e2e-all` green).
@@ -275,7 +275,9 @@ files. No breaking API changes.
 - `IDEAS.md` rolling backlog updated with fork-audit findings,
   pine_set_source workaround status, EPIPE fix delivery confirmation.
 
-[Unreleased]: https://github.com/iliaal/tradingview-mcp/compare/1.1.0...HEAD
+[1.3.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.3.0
+[Unreleased]: https://github.com/iliaal/tradingview-mcp/compare/1.3.0...HEAD
+[1.2.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.2.0
 [1.1.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.1.0
 
 ## [1.0.0] - 2026-04-29
