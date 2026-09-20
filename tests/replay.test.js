@@ -375,16 +375,42 @@ describe('autoplay() — delay validation', () => {
 // ── stop() ───────────────────────────────────────────────────────────────
 
 describe('stop()', () => {
-  it('calls stopReplay when started', async () => {
+  it('calls goToRealtime (and not stopReplay) when started', async () => {
+    let startedCalls = 0;
     const { _deps, evaluate } = mockDeps({
-      'isReplayStarted': true,
-      'stopReplay': undefined,
+      'isReplayStarted': () => (++startedCalls === 1),
+      'currentDate': null,
+      'goToRealtime': undefined,
+      'lastIndex': Math.floor(Date.now() / 1000),
     });
     const result = await stop({ _deps });
     assert.equal(result.success, true);
     assert.equal(result.action, 'replay_stopped');
+    const goCall = evaluate.calls.find(c => c.includes('goToRealtime'));
+    assert.ok(goCall, 'goToRealtime was called');
+    const noLeave = evaluate.calls.find(c => c.includes('.leaveReplay()'));
+    assert.equal(noLeave, undefined, 'leaveReplay not attempted when probe says absent');
     const stopCall = evaluate.calls.find(c => c.includes('stopReplay'));
-    assert.ok(stopCall, 'stopReplay was called');
+    assert.equal(stopCall, undefined, 'stopReplay must not be called first (desyncs TV 3.4.1 replay manager)');
+  });
+
+  it('prefers leaveReplay() when the TV build provides it', async () => {
+    let startedCalls = 0;
+    const { _deps, evaluate } = mockDeps({
+      'isReplayStarted': () => (++startedCalls === 1),
+      'currentDate': null,
+      'typeof api.leaveReplay': true,
+      'lastIndex': Math.floor(Date.now() / 1000),
+    });
+    const result = await stop({ _deps });
+    assert.equal(result.success, true);
+    assert.equal(result.action, 'replay_stopped');
+    const leaveCall = evaluate.calls.find(c => c.includes('.leaveReplay()'));
+    assert.ok(leaveCall, 'leaveReplay was called on TV builds that provide it');
+    const noGo = evaluate.calls.find(c => c.includes('.goToRealtime()'));
+    assert.equal(noGo, undefined, 'goToRealtime fallback not used when leaveReplay exists');
+    const noStop = evaluate.calls.find(c => c.includes('stopReplay'));
+    assert.equal(noStop, undefined, 'stopReplay must not be called');
   });
 
   it('returns already_stopped when not started', async () => {
@@ -398,6 +424,67 @@ describe('stop()', () => {
   it('does not call hideReplayToolbar', () => {
     const source = readFileSync(new URL('../src/core/replay.js', import.meta.url), 'utf8');
     assert.ok(!source.includes('hideReplayToolbar'), 'hideReplayToolbar must not appear anywhere');
+  });
+
+  it('propagates a goToRealtime failure instead of reporting success', async () => {
+    const { _deps } = mockDeps({ 'isReplayStarted': true });
+    const failing = { ..._deps, evaluate: async (expr) => {
+      if (String(expr).includes('goToRealtime')) throw new Error('Assertion failed: Replay is not started');
+      return _deps.evaluate(expr);
+    } };
+    await assert.rejects(
+      () => stop({ _deps: failing }),
+      (err) => err.message.includes('Replay is not started'),
+    );
+  });
+
+  it('waits for live bars to reload when replay was parked over a day back', async () => {
+    const OLD_TS = 1337342400; // 2012 replay date
+    const NEW_TS = 1789761600; // live edge
+    let startedCalls = 0;
+    const { _deps, evaluate } = mockDeps({
+      'isReplayStarted': () => (++startedCalls === 1),
+      'currentDate': null,
+      'goToRealtime': undefined,
+      'lastIndex': (() => { let n = 0; return () => (n++ === 0 ? OLD_TS : NEW_TS); })(),
+    });
+    const result = await stop({ _deps });
+    assert.equal(result.success, true);
+    assert.equal(result.action, 'replay_stopped');
+    const barReads = evaluate.calls.filter(c => c.includes('lastIndex'));
+    assert.ok(barReads.length >= 2, `expected pre-stop read + reload poll, got ${barReads.length}`);
+  });
+
+  it('exits promptly when replay was already near live (no advancement wait)', async () => {
+    const RECENT_TS = Math.floor(Date.now() / 1000) - 3600; // 1h back: stale but recent
+    let startedCalls = 0;
+    const { _deps, evaluate } = mockDeps({
+      'isReplayStarted': () => (++startedCalls === 1),
+      'currentDate': null,
+      'goToRealtime': undefined,
+      'lastIndex': RECENT_TS,
+    });
+    const recentResult = await stop({ _deps });
+    assert.equal(recentResult.success, true);
+    assert.equal(recentResult.action, 'replay_stopped');
+    const recentReads = evaluate.calls.filter(c => c.includes('lastIndex'));
+    assert.equal(recentReads.length, 2, `expected pre-stop read + single confirm poll, got ${recentReads.length}`);
+  });
+
+  it('waits for bars to become readable when none are loaded at stop time', async () => {
+    const NEW_TS = 1789761600; // live edge
+    let startedCalls = 0;
+    const { _deps, evaluate } = mockDeps({
+      'isReplayStarted': () => (++startedCalls === 1),
+      'currentDate': null,
+      'goToRealtime': undefined,
+      'lastIndex': (() => { let n = 0; return () => (n++ === 0 ? null : NEW_TS); })(),
+    });
+    const result = await stop({ _deps });
+    assert.equal(result.success, true);
+    assert.equal(result.action, 'replay_stopped');
+    const barReads = evaluate.calls.filter(c => c.includes('lastIndex'));
+    assert.ok(barReads.length >= 2, `expected unreadable read + recovery poll, got ${barReads.length}`);
   });
 });
 

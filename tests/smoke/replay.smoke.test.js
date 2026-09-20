@@ -25,8 +25,10 @@ import { parseSpeed, parseFlexDate } from '../../src/cli/replay_parsers.js';
 // like a live session. First matching key wins — put specific keys first.
 function mockSession({ currentDate } = {}) {
   const calls = [];
-  const state = { startedCalls: 0, dateCalls: 0, autoplayCalls: 0 };
+  const state = { startedCalls: 0, dateCalls: 0, autoplayCalls: 0, exited: false };
   const table = {
+    'typeof api.leaveReplay': () => false,
+    'goToRealtime': () => { state.exited = true; return undefined; },
     is_replay_available: () => ({
       is_replay_available: true,
       is_replay_started: true,
@@ -38,6 +40,7 @@ function mockSession({ currentDate } = {}) {
     isReplayAvailable: () => true,
     isReplayStarted: () => {
       state.startedCalls += 1;
+      if (state.exited) return false;
       return state.startedCalls === 1 ? false : true;
     },
     isAutoplayStarted: () => {
@@ -53,6 +56,8 @@ function mockSession({ currentDate } = {}) {
       // later reads advance, so step()'s change-detection breaks immediately.
       return state.dateCalls <= 2 ? currentDate : currentDate + 300;
     },
+    // Live-edge bars so stop()'s readiness poll settles immediately.
+    lastIndex: () => Math.floor(Date.now() / 1000),
     autoplayDelay: () => 200,
     realizedPL: () => 12.5,
     'position()': () => ({ side: 'long', qty: 1 }),

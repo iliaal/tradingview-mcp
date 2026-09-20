@@ -65,14 +65,9 @@ describe('TradingView MCP — post-1.1.0 feature E2E', { skip: OFFLINE_SKIP }, (
         (function() {
           try {
             var api = window.TradingViewApi && window.TradingViewApi._replayApi;
-            if (api) { try { api.stopReplay(); } catch(e) {} try { api.goToRealtime(); } catch(e) {} }
-            var col = window.TradingViewApi && window.TradingViewApi._chartWidgetCollection;
-            if (col) col._replaySessionState = null;
-            var linking = window.TradingViewApi && window.TradingViewApi._activeChartWidgetWV
-              && window.TradingViewApi._activeChartWidgetWV.value()
-              && window.TradingViewApi._activeChartWidgetWV.value()._chartWidget
-              && window.TradingViewApi._activeChartWidgetWV.value()._chartWidget._linking;
-            if (linking && linking._chartWidgetCollection) linking._chartWidgetCollection._replaySessionState = null;
+            function replayOn(a) { try { var s = a.isReplayStarted(); if (s && typeof s.value === 'function') return !!s.value(); return !!s; } catch (e) { return false; } }
+            if (api && replayOn(api)) { try { api.goToRealtime(); } catch(e) {} }
+            // No _replaySessionState nulling (unneeded; dismissal covers prompts).
           } catch(e) {}
         })()
       `);
@@ -88,6 +83,17 @@ describe('TradingView MCP — post-1.1.0 feature E2E', { skip: OFFLINE_SKIP }, (
     await sleep(800);
     await coreChart.setTimeframe({ timeframe: THROWAWAY_TF });
     await sleep(800);
+    // Fixture precondition: later tests assume this state (e.g. 'changed
+    // from daily'). Fail loudly here instead of cascading confusion when
+    // the chart is stuck (replay residue, blocking modal).
+    const landedSymbol = await activeSymbol();
+    const landedTF = await activeResolution();
+    assert.ok(
+      landedSymbol && landedSymbol.includes(THROWAWAY_SYMBOL),
+      `throwaway symbol landed (got ${landedSymbol})`,
+    );
+    const normTF = (r) => { const s = String(r || '').trim().toUpperCase(); return s === 'D' ? '1D' : s; };
+    assert.equal(normTF(landedTF), '1D', `throwaway timeframe landed (got ${landedTF})`);
 
     tmpShotDir = mkdtempSync(join(tmpdir(), 'tvmcp-shots-'));
   });
@@ -169,6 +175,16 @@ describe('TradingView MCP — post-1.1.0 feature E2E', { skip: OFFLINE_SKIP }, (
 
   // ── chart_set_timeframe resolution readback (07d8117) ───────────────────
   describe('chart_set_timeframe readback', () => {
+    before(async () => {
+      // Local precondition: the capture suite above can leave the chart on
+      // another timeframe, so establish D here instead of assuming the
+      // file-level fixture survived.
+      await coreChart.setTimeframe({ timeframe: THROWAWAY_TF });
+      const landed = await activeResolution();
+      const norm = (r) => { const s = String(r || '').trim().toUpperCase(); return s === 'D' ? '1D' : s; };
+      assert.equal(norm(landed), '1D', `precondition timeframe landed (got ${landed})`);
+    });
+
     after(async () => {
       try { await coreChart.setTimeframe({ timeframe: THROWAWAY_TF }); } catch {}
       await sleep(600);

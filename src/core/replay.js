@@ -1,8 +1,16 @@
 /**
  * Core replay mode logic.
  */
-import { evaluate as _evaluate, getReplayApi as _getReplayApi, getReplayUIController as _getReplayUIController, getClient as _getClient, safeString } from '../connection.js';
+import { evaluate as _evaluate, getReplayApi as _getReplayApi, getReplayUIController as _getReplayUIController, getClient as _getClient, safeString, KNOWN_PATHS } from '../connection.js';
 import { dismissBlockingDialogs } from './dialog.js';
+
+// Last loaded bar time (unix seconds) or null when bars are unavailable.
+// Used by stop() to confirm the chart actually reloaded live bars after
+// goToRealtime() — TV 3.4.1 returns from goToRealtime immediately while the
+// reload happens async, and callers reading right after would see stale
+// replay bars (or momentarily no bars at all).
+const LAST_BAR_TS_JS = `(function(){ try { var bars = ${KNOWN_PATHS.mainSeriesBars}; if (!bars || typeof bars.lastIndex !== 'function') return null; var i = bars.lastIndex(); if (i == null || i < 0) return null; var last = bars.valueAt(i); return last ? last[0] : null; } catch(e) { return null; } })()`;
+
 
 export const VALID_AUTOPLAY_DELAYS = [100, 143, 200, 300, 1000, 2000, 3000, 5000, 10000];
 
@@ -205,9 +213,13 @@ export async function start({ date, scrollBack, _deps } = {}) {
     // on the pre-teardown cursor.
     await new Promise(r => setTimeout(r, 300));
   } else {
-    // Cold start (or re-call without a date) — just nuke any cached state
-    // so a "Continue your last replay?" dialog doesn't fight us.
-    await evaluate(CLEAR_SESSION_STATE_JS);
+    // Cold start (or re-call without a date) — dismiss a stale 'Continue
+    // your last replay?' prompt instead of wiping _replaySessionState.
+    // Data-loss dialogs are detected, never clicked. (An earlier theory
+    // blamed session-state nulling for exit wedges; A/B isolation
+    // disproved it — both null and null-free paths wedge identically.
+    // Dialog dismissal covers the restart-prompt concern.)
+    try { await dismissBlockingDialogs({ evaluate, discardUnsaved: false }); } catch {}
   }
 
   // Pre-extend the bar buffer if requested. Must happen BEFORE
@@ -343,10 +355,11 @@ export async function autoplay({ speed, _deps } = {}) {
   return { success: true, autoplay_active: !!isAutoplay, delay_ms: currentDelay };
 }
 
-// Wipes TV's saved-replay-state holders. Idempotent — the state may be null
-// already, may be populated from a prior session, or may be re-populated by
-// TV's internal callbacks. We always set it to null because the only path to
-// avoid 'Continue your last replay?' on next restart is empty state at exit.
+// Wipes TV's saved-replay-state holders. Retained for start()'s live-session
+// re-entry teardown, where it predates this investigation. (An earlier
+// theory blamed this wipe for exit wedges; A/B isolation disproved it.
+// It stays out of stop() and test setup/teardown as unneeded there —
+// dialog dismissal covers Leave/Continue prompts instead.)
 // On TV 3.1, the cached session state lives at two paths: the top-level
 // _chartWidgetCollection AND the linking namespace at
 // chartWidget._linking._chartWidgetCollection. The linking copy is what
@@ -371,32 +384,89 @@ export async function stop({ _deps } = {}) {
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
-    // Already stopped, but TV may still have saved state set from before
-    // (e.g. when this run inherited state from a prior session). Wipe it
-    // and dismiss any lingering 'Leave current replay?' dialog.
-    await evaluate(CLEAR_SESSION_STATE_JS);
+    // Already stopped: only dismiss a lingering 'Leave current replay?'
+    // dialog (Leave/Continue prompts are covered by dismissal; no state
+    // wipe needed here).
     const dismissed = await dismissBlockingDialogs({ evaluate });
     return { success: true, action: 'already_stopped', dismissed_dialogs: dismissed };
   }
-  // TV 3.1.0 needs both stopReplay and goToRealtime to fully exit replay
-  // and clear the saved-replay state that triggers a 'Leave current replay?'
-  // dialog on subsequent setSymbol/setResolution. Run both inside one IIFE
-  // with try/catch — TV's replay engine sometimes treats them as a sequence
-  // (stopReplay runs, goToRealtime throws 'Replay is not started' because
-  // the engine already cleaned up). Both succeeding-and-no-opping is fine,
-  // both running cleanly is fine, only one running is fine. The combined
-  // effect is what matters: by the time this returns, replay is off and
-  // saved state is cleared.
-  await evaluate(`
-    (function() {
-      var api = window.TradingViewApi && window.TradingViewApi._replayApi;
-      if (api) {
-        try { api.stopReplay(); } catch(e) {}
-        try { api.goToRealtime(); } catch(e) {}
+  // goToRealtime() alone ends the replay session *and* scrolls the chart
+  // back to the live edge. stopReplay() only routes through
+  // requestCloseReplay(), which disables the replay UI mode without
+  // clearing the manager's session — the chart stays parked on the
+  // historical bar, and calling stopReplay() first desyncs the manager so
+  // that goToRealtime() then throws 'Assertion failed: Replay is not
+  // started', stranding the chart until a page reload (observed on TV
+  // Desktop 3.4.1; port of upstream #532).
+  const beforeTs = await evaluate(LAST_BAR_TS_JS);
+  // TV 3.4.1 added a dedicated leaveReplay() that fully exits replay AND
+  // reloads live bars; bare goToRealtime() flips the mode flag but can
+  // leave the bar buffer parked historical (observed: bars stuck at the
+  // replay date 60s+ after goToRealtime returned). Prefer leaveReplay when
+  // present, fall back to goToRealtime on older builds.
+  // leaveReplay is invoked WITHOUT awaitPromise: its promise can depend on
+  // a confirmation dialog, so awaiting it before dismissing would deadlock
+  // the sequence. The readiness poll below is the bounded verifier — a
+  // failed transition surfaces there with full state, not as silent success.
+  const canLeave = await evaluate(
+    `(function() { var api = window.TradingViewApi && window.TradingViewApi._replayApi; return !!(api && typeof api.leaveReplay === 'function'); })()`,
+  );
+  if (canLeave) {
+    await evaluate(
+      `(function() { var api = window.TradingViewApi && window.TradingViewApi._replayApi; try { api.leaveReplay(); } catch (e) {} })()`,
+    );
+  } else {
+    // Older builds: goToRealtime is the documented exit; await its promise
+    // so a rejected transition surfaces here (upstream #532).
+    await evaluate(`${rp}.goToRealtime()`, { awaitPromise: true });
+  }
+  // A 'Leave current replay?' confirmation can hold the transition open;
+  // dismiss replay dialogs now (data-loss dialogs are detected, not
+  // clicked) so the readiness poll below observes the real outcome.
+  await dismissBlockingDialogs({ evaluate, discardUnsaved: false });
+  // Poll for live bars BEFORE any cleanup: the reload happens async and
+  // evaluate() runs synchronously on the page, so a heavy DOM scan here
+  // would block the renderer and stall the very reload we wait for.
+  // Last resort is NOT a page reload: reload can discard unsaved Pine and
+  // drawing state, which stop() must never do uninvited. Instead, re-scan
+  // for a (possibly delayed) 'Leave current replay?' confirmation on each
+  // poll round — a dialog holding the transition open is the known benign
+  // cause — and throw an explicit recovery-required error otherwise.
+  // Callers that own the chart session (e.g. the e2e suite) may reload.
+  {
+    const needAdvance = typeof beforeTs === 'number' && beforeTs < Date.now() / 1000 - 86400;
+    const live = async () => {
+      const afterTs = await evaluate(LAST_BAR_TS_JS);
+      // isReplayStarted() unwraps to a boolean via wv() (pinned by
+      // status() typeof checks). currentDate() is deliberately NOT gated:
+      // it returns a WatchedValue whose timing-dependent shape (object vs
+      // null) timed the poll out even after replay exited and bars
+      // recovered — started-plus-bars is the contract.
+      const startedNow = await evaluate(wv(`${rp}.isReplayStarted()`));
+      const readable = typeof afterTs === 'number';
+      const replayOff = !startedNow;
+      return readable && replayOff && (!needAdvance || afterTs !== beforeTs) ? afterTs : null;
+    };
+    const deadline = Date.now() + 60000;
+    let round = 0;
+    for (;;) {
+      const settled = await live();
+      if (settled !== null) break;
+      // Re-scan for a delayed confirmation dialog every ~2s. Safe variant:
+      // data-loss dialogs are detected, never clicked.
+      if (++round % 4 === 0) {
+        try { await dismissBlockingDialogs({ evaluate, discardUnsaved: false }); } catch {}
       }
-    })()
-  `);
-  await evaluate(CLEAR_SESSION_STATE_JS);
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `replay stopped but the chart did not return to live bars within 60s (replay mode exited, bars unreadable) — the datafeed looks wedged: reload the TradingView page and retry`,
+        );
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  // Dialog dismissal runs after the chart is live so it can't disturb the
+  // reload (Leave/Continue prompts covered; no state wipe needed).
   const dismissed = await dismissBlockingDialogs({ evaluate });
   return { success: true, action: 'replay_stopped', dismissed_dialogs: dismissed };
 }

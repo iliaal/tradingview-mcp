@@ -1,20 +1,17 @@
 /**
- * Tool-count parity: the registered MCP surface vs the documented size.
+ * Registry surface contract: every tool group registers, and no tool
+ * name is registered twice.
  *
- * The documented reference is the "~93 tools" header in tests/e2e.test.js
- * (2026-04-25). The surface grows as groups are added, so this is a
- * tolerant band — not an exact pin. It fails loudly on a mass drop
- * (deleted group, registration typo swallowing a group) or an explosion
- * (duplicate registration), while normal growth stays green.
+ * Deliberately no total-count assertion: the surface grows as groups are
+ * added, so a pinned or banded count is either a stale tripwire or a
+ * tautology. Mass deletion is caught per-group below (a removed group
+ * fails loudly via the missing-module import, a gutted group via the
+ * non-empty check).
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerEnabledTools, TOOL_GROUPS } from '../src/tools/registry.js';
 
-// Documented surface size; see tests/e2e.test.js header ("93 tools as of 2026-04-25").
-const DOCUMENTED_COUNT = 93;
-// Headroom for legitimate growth (and a floor against mass deletion).
-const TOLERANCE = 35;
 
 function fakeServer() {
   const tools = [];
@@ -39,12 +36,17 @@ describe('tool-count parity — registry vs documented surface', () => {
     }
   });
 
-  it('total stays within tolerance of the documented count', () => {
+  it('default registration matches the all-groups sum (no silent drop)', () => {
     const { tools } = collectAll();
-    assert.ok(
-      Math.abs(tools.length - DOCUMENTED_COUNT) <= TOLERANCE,
-      `registered ${tools.length} tools, documented ~${DOCUMENTED_COUNT} ` +
-      `(tolerance ±${TOLERANCE}) — update DOCUMENTED_COUNT if the surface grew intentionally`,
+    let expected = 0;
+    for (const register of Object.values(TOOL_GROUPS)) {
+      const server = fakeServer();
+      register(server);
+      expected += server.tools.length;
+    }
+    assert.equal(
+      tools.length, expected,
+      `default registration dropped tools (got ${tools.length}, groups sum ${expected})`,
     );
   });
 

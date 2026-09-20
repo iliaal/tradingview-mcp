@@ -20,24 +20,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Port of upstream #536, including its `tests/drawing_style.test.js`
   regression suite (19 tests, wired into `test:offline`/`test:unit`).
 - Offline test coverage: `hotlist` + `replay` session smoke suites and a
-  registry tool-count parity test; orphaned `new_features.e2e.test.js`
-  gated on `SKIP_NETWORK_TESTS` and wired into new `npm run test:e2e-all`.
-  Live `test:e2e-all` still requires TradingView Desktop on :9222.
+  registry surface-contract test. Orphaned `new_features.e2e.test.js`
+  gated on `SKIP_NETWORK_TESTS` and wired into new `npm run test:e2e-all`
+  (serial `--test-concurrency=1`; shared chart can't run suites in
+  parallel). Live `test:e2e-all` green on TV Desktop 3.4.1 (107 pass,
+  0 fail).
 
 ### Changed
-
-- Unified agent context: `AGENTS.md` now carries beads ledger, rules,
-  TradingView decision tree, and CodeSage guide in one file; `CLAUDE.md`
-  is a symlink to it. No stale tool counts.
 - Pine `compile()` reuses the `data-qa-id` fast path for icon-only
   add-to-chart buttons; launch scripts silence child streams
   (`Start-Process` on Windows). Remainder of upstream #522/#532.
+- `replay.stop()` uses goToRealtime-only exit (never `stopReplay()` first,
+  which desyncs TV's replay manager), prefers 3.4.1's `leaveReplay()` when
+  present, and polls for live-bar reload before returning. Test setup
+  no longer calls `goToRealtime()` on non-replay charts (that desync
+  wedged every later session). Full upstream #532 replay core, verified
+  live on TV Desktop 3.4.1 (`test:e2e-all` green).
 
 ### Deferred (documented, not merged)
 
-- Upstream #526 (new `indicator_get/set_style` tools, 455 additions) and
-  #530 (MSIX sync-EPERM/sandbox) need a live-TV verification pass first;
-  #523 (trade journal) and divergent iliaal forks stay out of scope.
+- Upstream #526 (new `indicator_get/set_style` tools, 455 additions) is
+  deferred for design review; #530 (MSIX sync-EPERM/sandbox) for a
+  Windows-live verification pass; #523 (trade journal) and divergent
+  iliaal forks stay out of scope.
 
 ## [1.2.0] - 2026-06-06
 
