@@ -208,8 +208,8 @@ describe('captureScreenshot — bringToFront gating', () => {
   it('darwin + hidden uses argv-form osascript with static script, failures swallowed', async () => {
     const tmp = makeTmp();
     const shellCalls = [];
-    const fakeExec = (file, args, cb) => {
-      shellCalls.push([file, args]);
+    const fakeExec = (file, args, _opts, cb) => {
+      shellCalls.push([file, args, _opts]);
       cb(new Error('osascript failed')); // must be swallowed
     };
     const r = await captureScreenshot({
@@ -218,11 +218,12 @@ describe('captureScreenshot — bringToFront gating', () => {
     });
     assert.equal(r.success, true, 'activation failure must not block capture');
     assert.equal(shellCalls.length, 1);
-    const [file, args] = shellCalls[0];
+    const [file, args, opts] = shellCalls[0];
     assert.equal(file, 'osascript');
     assert.ok(Array.isArray(args), 'argv-form, no shell string');
     assert.equal(args[0], '-e');
     assert.ok(args[1].includes('tell application'), 'static AppleScript');
+    assert.ok(opts && Number.isFinite(opts.timeout) && opts.timeout > 0, 'child killed via timeout option');
     trackFile(r.file_path);
   });
 
@@ -242,6 +243,32 @@ describe('captureScreenshot — bringToFront gating', () => {
         },
       });
       assert.equal(r.success, true, 'hung preflight must not block capture');
+      trackFile(r.file_path);
+    } finally {
+      if (prev === undefined) delete process.env.TV_PREFLIGHT_TIMEOUT_MS;
+      else process.env.TV_PREFLIGHT_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('hidden tab + never-calling exec still completes within preflight budget', async () => {
+    // evaluate resolves fast (hidden) but the exec child never calls back:
+    // without the preflight race + child timeout this would hang forever.
+    const tmp = makeTmp();
+    const prev = process.env.TV_PREFLIGHT_TIMEOUT_MS;
+    process.env.TV_PREFLIGHT_TIMEOUT_MS = '80';
+    const started = Date.now();
+    try {
+      const r = await captureScreenshot({
+        filename: 'hung-exec', output_dir: tmp,
+        _deps: {
+          platform: 'darwin',
+          execFile: () => {}, // never calls back (hung child, no callback)
+          evaluate: async (expr) => (expr === 'document.visibilityState' ? 'hidden' : null),
+          withReconnect: async (op) => op(shotClient()),
+        },
+      });
+      assert.equal(r.success, true, 'hung exec must not block capture');
+      assert.ok(Date.now() - started < 5000, 'resolved via preflight budget, not child');
       trackFile(r.file_path);
     } finally {
       if (prev === undefined) delete process.env.TV_PREFLIGHT_TIMEOUT_MS;

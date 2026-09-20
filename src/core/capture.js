@@ -44,8 +44,11 @@ export function isCaptureTimeout(err) {
 }
 
 // Static AppleScript — no interpolated input, so no injection surface.
-// TODO: allow the target app name to be overridden via TV_APP_NAME env.
 const TV_ACTIVATE_SCRIPT = 'tell application "TradingView" to activate';
+// Bound for the activation child: the outer preflight race caps the wait,
+// but without this the hung osascript process itself would linger and keep
+// the CLI alive after capture returns.
+const ACTIVATE_CHILD_TIMEOUT_MS = 5000;
 
 // Best-effort window focus before capture. Doubly gated: a healthy
 // (visible) tab never shells out, and non-macOS platforms never shell out
@@ -61,7 +64,7 @@ async function bringToFront({ evaluate, execFileFn, platform }) {
     if ((platform ?? process.platform) !== 'darwin') return;
     await new Promise((resolve) => {
       try {
-        execFileFn('osascript', ['-e', TV_ACTIVATE_SCRIPT], () => resolve());
+        execFileFn('osascript', ['-e', TV_ACTIVATE_SCRIPT], { timeout: ACTIVATE_CHILD_TIMEOUT_MS }, () => resolve());
       } catch { resolve(); }
     });
   } catch { /* never block capture on focus */ }
