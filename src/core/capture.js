@@ -20,6 +20,13 @@ export function resolveCaptureTimeoutMs() {
   return Number.isFinite(v) && v > 0 ? v : CAPTURE_TIMEOUT_MS;
 }
 
+export const PREFLIGHT_TIMEOUT_MS = 7000;
+
+export function resolvePreflightTimeoutMs() {
+  const v = Number(process.env.TV_PREFLIGHT_TIMEOUT_MS);
+  return Number.isFinite(v) && v > 0 ? v : PREFLIGHT_TIMEOUT_MS;
+}
+
 export function withTimeout(promise, ms, stage) {
   const timeoutMs = ms ?? resolveCaptureTimeoutMs();
   let timer;
@@ -143,7 +150,13 @@ export async function captureScreenshot({ region, filename, method, output_dir, 
   // Focus the window first (best-effort, never throws), then bound the CDP
   // round-trip: a wedged renderer must surface as a stage-tagged timeout,
   // not a hung tool call — and it must never leave a partial file behind.
-  await bringToFront({ evaluate, execFileFn: execFile, platform });
+  try {
+    await withTimeout(
+      bringToFront({ evaluate, execFileFn: execFile, platform }),
+      resolvePreflightTimeoutMs(),
+      'bringToFront',
+    );
+  } catch { /* never block capture on focus */ }
   const timeoutMs = resolveCaptureTimeoutMs();
   const attemptCapture = () => withTimeout(
     withReconnect(c => c.Page.captureScreenshot(params)),

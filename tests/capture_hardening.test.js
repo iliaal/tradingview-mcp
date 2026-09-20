@@ -225,8 +225,30 @@ describe('captureScreenshot — bringToFront gating', () => {
     assert.ok(args[1].includes('tell application'), 'static AppleScript');
     trackFile(r.file_path);
   });
-});
 
+  it('hung visibility probe + hung exec callback resolve via preflight budget', async () => {
+    const tmp = makeTmp();
+    const prev = process.env.TV_PREFLIGHT_TIMEOUT_MS;
+    process.env.TV_PREFLIGHT_TIMEOUT_MS = '60';
+    try {
+      const shellCalls = [];
+      const r = await captureScreenshot({
+        filename: 'hung-preflight', output_dir: tmp,
+        _deps: {
+          platform: 'darwin',
+          execFile: (...a) => { shellCalls.push(a); /* callback never fires */ },
+          evaluate: async () => new Promise(() => {}), // visibility probe hangs
+          withReconnect: async (op) => op(shotClient()),
+        },
+      });
+      assert.equal(r.success, true, 'hung preflight must not block capture');
+      trackFile(r.file_path);
+    } finally {
+      if (prev === undefined) delete process.env.TV_PREFLIGHT_TIMEOUT_MS;
+      else process.env.TV_PREFLIGHT_TIMEOUT_MS = prev;
+    }
+  });
+});
 describe('captureScreenshot — chart selector chain', () => {
   it('tries .active → plain → substring → pane-canvas → canvas, in order', async () => {
     const tmp = makeTmp();
