@@ -8,3 +8,18 @@ discovery-log.json
 .plan/
 # Local project-scoped MCP config (may hold machine-specific server paths)
 .mcp.json
+
+# Local configuration and credentials (never commit secrets)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+rules.json
+
+# macOS
+.DS_Store
