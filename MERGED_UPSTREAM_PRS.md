@@ -29,7 +29,7 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 | #102 | CI and agent guardrails | 2026-04-25 | Phase N.40 partial — CI workflow ported (commit c395533); agent-guardrail bits not applicable |
 | #536 | fix(drawing): accept color/linewidth/linestyle on draw_shape, report what landed | 2026-09-20 | Ported: first-class style params + landed/mismatch report, readback never fails draw |
 | #522 | fix(pine): detect icon-only add/update-to-chart button | 2026-09-20 | Remainder ported: compile() data-qa-id fast path (title-attr base was Phase A.2) |
-| #532 | Fix replay_stop leaving the chart in the past; make the test suite pass on Windows | 2026-09-20 | Fully ported: scripts (stream redirect, Start-Process), replay core (goToRealtime-only + leaveReplay preference + live-bar readiness poll), e2e teardown via core stop. Live-verified on TV 3.4.1 |
+| #532 | Fix replay_stop leaving the chart in the past; make the test suite pass on Windows | 2026-09-20 | Fully ported: scripts (stream redirect, Start-Process); replay core exits without stopReplay() (leaveReplay() preferred on 3.4.1, goToRealtime() fallback) + live-bar readiness poll; e2e teardown via core stop. Live-verified on TV 3.4.1 |
 | #528 | fix(tools): stop reading the string "false" as true | 2026-09-20 | Verified present (boolish superset in src/tools/_validation.js) — no change |
 | #524 | Fix Windows path bug in source-audit test, apply npm audit fixes | 2026-09-20 | Verified present (fileURLToPath); remaining audit finding (brace-expansion DoS) fixed via `npm audit fix` → 0 vulns |
 | #533 | Point the install docs at the real Claude Code config paths | 2026-09-20 | Verified present (README + SETUP_GUIDE) — no change |

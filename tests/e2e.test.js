@@ -1,7 +1,7 @@
 /**
- * Comprehensive E2E tests for the TradingView MCP tools (93 tools as of
- * 2026-04-25). Each describe-block covers a tool family and exercises the
- * representative paths via wrapper functions; complete-coverage smoke tests
+ * Comprehensive E2E tests for the TradingView MCP tools. Each
+ * describe-block covers a tool family and exercises the representative
+ * paths via wrapper functions; complete-coverage smoke tests
  * for individual exports live under tests/smoke/*.smoke.test.js.
  *
  * Requires TradingView Desktop running with --remote-debugging-port=9222
@@ -124,7 +124,7 @@ async function dismissDialogs() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe('TradingView MCP — Full E2E (93 tools)', () => {
+describe('TradingView MCP — Full E2E', () => {
 
   before(async () => {
     try {
@@ -1280,11 +1280,9 @@ val = array.get(a, 5)`;
     });
 
     it('replay_stop — return to realtime', async () => {
-      // Log pre-stop state so a failure carries the exact preconditions.
-      const pre = await coreReplay.status().catch(() => null);
-      console.log('   [replay_stop pre]', JSON.stringify(pre && { started: pre.is_replay_started, autoplay: pre.is_autoplay_started, date: pre.current_date }));
-      // Exercise the wrapper. core.replay.stop is the canonical teardown —
-      // it handles the saved-replay-state cleanup that raw stopReplay misses.
+      // Exercise the wrapper. core.replay.stop is the canonical teardown:
+      // it reports replay_stopped (or already_stopped) only after live bars
+      // are readable again — never a fire-and-forget success.
       const result = await coreReplay.stop();
       assert.equal(result.success, true, 'stop succeeds');
       assert.ok(['replay_stopped', 'already_stopped'].includes(result.action), `result.action=${result.action}`);
