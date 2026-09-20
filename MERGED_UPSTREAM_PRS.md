@@ -38,6 +38,13 @@ PRs from `tradesdontlie/tradingview-mcp` that have been reviewed and applied to 
 | #526 | Add indicator_get_style / indicator_set_style | 2026-09-20 | **DEFERRED** — new 2-tool surface (455 additions), needs design + live-TV pass |
 | #523 | Add local trade journal and XAUUSD skill | 2026-09-20 | **SKIPPED** — personal-feature PR, out of scope |
 
+## Fork-mined, no upstream PR (tradesdontlie forks audit 2026-09-20)
+
+| Fork | Item | Applied | Notes |
+|------|------|---------|-------|
+| eltx88 | secrets/OS `.gitignore` entries | 2026-09-20 | Commit 762ea18 |
+| lakshman1005 + 0xdungbui | CLI stdout truncation on `process.exit()` (65KB pipe cutoff) | 2026-09-20 | NOT REPRODUCIBLE locally — our result path already drains; unified the 6 help/error exits to exitCode+return for the same libuv-safe rationale (no live truncation bug found) |
+
 ## Untouched / not-applicable upstream PRs
 
 | PR | Title | Reason |
