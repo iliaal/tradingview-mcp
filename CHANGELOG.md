@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-20
+
 ### Added
 
 - Fork-adopted drawing tools: N-point shapes, `draw_move`,
@@ -291,8 +293,9 @@ files. No breaking API changes.
 - `IDEAS.md` rolling backlog updated with fork-audit findings,
   pine_set_source workaround status, EPIPE fix delivery confirmation.
 
+[1.4.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.4.0
+[Unreleased]: https://github.com/iliaal/tradingview-mcp/compare/1.4.0...HEAD
 [1.3.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.3.0
-[Unreleased]: https://github.com/iliaal/tradingview-mcp/compare/1.3.0...HEAD
 [1.2.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.2.0
 [1.1.0]: https://github.com/iliaal/tradingview-mcp/releases/tag/1.1.0
 
