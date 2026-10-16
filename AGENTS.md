@@ -1,4 +1,4 @@
-<!-- BEGIN beads-managed (br v6) -->
+<!-- BEGIN beads-managed -->
 ## Beads ledger (`br`)
 
 This repo is onboarded to the central `br` ledger. A PATH wrapper routes every
@@ -8,8 +8,9 @@ protocol is documented separately.
 
 **Allowed commands** (the wrapper denies everything else): `create update comments
 close reopen list show count stats search where info`, `doctor health`,
-`sync --import-only|--status`, `config get|list`. Never pass `--db`,
-`--no-auto-flush`, `--no-auto-import`, `--no-db`, `--allow-stale`, or `--prefix`.
+`doctor migrate-schema plan|apply|undo`, `sync --import-only|--status`,
+`config get|list`. Never pass `--db`, `--no-auto-flush`, `--no-auto-import`,
+`--no-db`, `--allow-stale`, or `--prefix`.
 
 **JSON envelopes**: `br list --json` → `{issues, total}`; `br show ID --json` →
 a one-element array with comments under `.[0].comments`. Pipe `br` JSON to `jq`
@@ -25,14 +26,18 @@ only as `rtk proxy br … | rtk proxy jq …` (raw, unfiltered output).
   and a `close_reason` of `fixed|false-positive|wont-fix|duplicate`.
 - Description first line is `file: <path>:<line>`, repo-relative.
 - Attribution: `br create --actor <id>`, `br comments add --author <id>`.
-- Closing is two steps (0.2.19 refuses a terminal status in `update`): first
+- Closing is two steps (`br` refuses a terminal status in `update`): first
   `br update ID` clearing `state:*` and the assignee, then `br close ID --reason <r>`.
+- `update` refuses to clear a non-empty `notes`, `description`, `design`,
+  `acceptance-criteria`, `prerequisites`, or `agent-context` body, or to replace
+  it with content shorter than half its current length. Extend `notes` with
+  `--append-notes` rather than forcing a shorter rewrite with `--force`.
 - Never `--set-labels` (it erases other labels); use `--add-label`/`--remove-label`.
 
 **Human gate** — create as `state:needs-human` and get pre-change approval for: P0,
 `type:security`, `type:memory`, destructive operations, schema/data migrations, or
 public API changes.
-<!-- END beads-managed (br v6) -->
+<!-- END beads-managed -->
 
 ---
 
