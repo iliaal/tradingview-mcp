@@ -16,7 +16,7 @@
  * Run: TV_CAPTURE_TIMEOUT_MS=60 node --test tests/capture_hardening.test.js
  * (each timeout test sets the env var itself; no global setting required).
  */
-import { describe, it, afterEach, after } from 'node:test';
+import { describe, it, beforeEach, afterEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,7 +43,19 @@ function trackFile(p) {
   return p;
 }
 
+// The capture/preflight timers are unref'd, and the hang mocks hold no
+// handle, unlike a real hung CDP call whose websocket keeps the loop alive.
+// Node <= 22's runner cancels a test once the loop drains, so hold a ref'd
+// handle per test. It is bounded: a timeout that never fires still drains
+// the loop after LOOP_HOLD_MS and fails the test instead of hanging CI.
+const LOOP_HOLD_MS = 5000;
+let loopHold;
+beforeEach(() => {
+  loopHold = setTimeout(() => {}, LOOP_HOLD_MS);
+});
+
 afterEach(() => {
+  clearTimeout(loopHold);
   resetCdpMocks();
   if (savedTimeoutEnv === undefined) delete process.env.TV_CAPTURE_TIMEOUT_MS;
   else process.env.TV_CAPTURE_TIMEOUT_MS = savedTimeoutEnv;
