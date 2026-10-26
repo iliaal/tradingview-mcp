@@ -2,8 +2,8 @@
  * E2E validation for behaviors added after 1.1.0 that were committed without
  * being exercised against a live TradingView (commits a3e5160, 7d62d78,
  * e2f4601, 07d8117). Each test calls the actual core wrapper — never an inline
- * re-implementation — so a wrapper regression cannot pass silently (see
- * ~/ai/wiki/debugging/review-traps.md on inline-IIFE tests).
+ * re-implementation — so a wrapper regression cannot pass silently (inline
+ * IIFE copies keep passing after the wrapper they duplicate breaks).
  *
  * Requires TradingView Desktop running with --remote-debugging-port=9222.
  * Run: node --test tests/new_features.e2e.test.js
@@ -278,7 +278,7 @@ describe('TradingView MCP — post-1.1.0 feature E2E', { skip: OFFLINE_SKIP }, (
   // ── #158 pine_open slot rebind (a3e5160, e2f4601) ───────────────────────
   describe('pine_open slot rebind (#158)', () => {
     // KNOWN BROKEN on TV Desktop 3.2.0 — pending the pine_open/pine_save
-    // rework (tracked in ~/ai/wiki/vendors/tradingview-desktop.md). Root cause,
+    // rework. Root cause,
     // verified by live CDP probing on 3.2.0.7916:
     //   - pineEditorTestApi().openEditor() instantiates a SEPARATE editor
     //     instance, desynced from the live on-screen Monaco. testApi.openScript

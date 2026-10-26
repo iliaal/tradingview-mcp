@@ -12,7 +12,7 @@ Improvements tracked but not yet implemented.
 - **2026-04-25** — `stream.js` smoke coverage (10 tests). Added `_deps` to `pollLoop` so iteration count, sleep, signals, and stdout/stderr are injectable. Includes regressions for the `inner.get(false)` unwrap path and study-filter threading.
 - **2026-04-25** — Per-call `_deps` DI migration for 10 core modules: alerts, batch, capture, data, health, indicators, pane, pine, ui, watchlist. The global `__setTestOverrides` hook still works as the underlying fallback. (`refactor/wrappers-and-di`)
 - **2026-04-25** — E2e wrapper refactor: 37 of 79 raw `evaluate(...CHART_API...)` sites replaced with wrapper calls (`coreChart`, `coreDrawing`, `coreHealth`, `corePine`, `coreData`, `coreUi`, `coreIndicators`). Includes the four "output size budget" tests that were re-implementing wrapper IIFEs verbatim — now they assert the wrapper's actual output, so a TV API rename produces a single-source failure instead of parallel-implementation drift. Down to 42 raw sites; the rest are DOM existence probes, FIND_MONACO walks, or BARS_PATH single-bar reads with no wrapper equivalent. (`refactor/wrappers-and-di`)
-- **2026-04-25** — TV Desktop 3.1.0 quirks wiki entry written at `~/ai/wiki/vendors/tradingview-desktop.md` covering API surface changes, state-pollution traps, Pine graphics object path, and launch-path quirks.
+- **2026-04-25** — TV Desktop 3.1.0 quirks written up in private maintainer notes, covering API surface changes, state-pollution traps, Pine graphics object path, and launch-path quirks.
 
 ## Fork audit 2026-05-09
 
@@ -57,7 +57,7 @@ Sourced from `scripts/audit_forks.sh --top 100` (report at `/tmp/fork_audit.md`)
 
 ## Audit 2026-05-16 — historical-replay sweep findings
 
-Sourced from a NQ master DB validation pass at `~/ai/nq/master/` that tried to
+Sourced from a validation pass against a private NQ master DB that tried to
 sweep 50 corpus sessions across 10 NQ futures contracts, replay each to 9:33
 ET, and compare the Pine `-4 CB Model Indicator`'s drawn line Y values to a
 Python-computed reference. **One session validated bit-exact** (2026-05-08

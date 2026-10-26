@@ -2,9 +2,9 @@
 ## Beads ledger (`br`)
 
 This repo is onboarded to the central `br` ledger. A PATH wrapper routes every
-`br` call from here into a private store under `~/ai/beads/<slug>/`; this work tree
-carries **no** `.beads` artifacts (do not create any). Full protocol lives in
-`~/ai/wiki/tools/beads-review-ledger.md`.
+`br` call from here into a private review ledger stored outside the repository;
+this work tree carries **no** `.beads` artifacts (do not create any). The full
+protocol is documented separately.
 
 **Allowed commands** (the wrapper denies everything else): `create update comments
 close reopen list show count stats search where info`, `doctor health`,
